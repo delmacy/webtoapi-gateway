@@ -17,12 +17,27 @@ function safeOrigin(url: string): string | undefined {
 	}
 }
 
+function safeRequestKeys(request: Request): string[] | undefined {
+	try {
+		const body = request.postDataJSON();
+		if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+		return Object.keys(body).slice(0, 32);
+	} catch {
+		return undefined;
+	}
+}
+
 function observeRequest(providerId: string, request: Request, transport?: RuntimeTransport): void {
 	const url = request.url();
+	const headers = request.headers();
+	const clientVersion = headers.version?.trim();
 	runtimeProfiles.update(providerId, {
 		origin: safeOrigin(url),
 		endpoint: url,
 		transport: transport ?? "unknown",
+		requestMethod: request.method(),
+		clientVersion: clientVersion || undefined,
+		requestKeys: safeRequestKeys(request),
 		source: "network",
 	});
 }
@@ -45,8 +60,9 @@ function observeResponse(providerId: string, response: Response, transport?: Run
 
 /**
  * Observe normal traffic from an already authenticated provider tab.
- * This intentionally records only endpoint/protocol metadata; it does not log
- * cookies, Authorization values, request bodies, CAPTCHA data, or fingerprints.
+ * Records endpoint/protocol and a small allowlist of non-sensitive request
+ * metadata. It never stores cookies, Authorization values, request content,
+ * CAPTCHA data, or browser fingerprints.
  */
 export function installNetworkObserver(page: Page, options: NetworkObserverOptions): void {
 	let providers = observedPages.get(page);
