@@ -1,9 +1,6 @@
 import type { ChatCompletionRequest, ChatMessage } from "../openai/types.ts";
 import { GW_JSON_END, GW_JSON_START, GW_PROTOCOL_VERSION } from "../protocol/types.ts";
-import {
-	buildPromptFromMessages,
-	resolveEffectiveTools,
-} from "../tool-calling/converter.ts";
+import { buildPromptFromMessages, resolveEffectiveTools } from "../tool-calling/converter.ts";
 import type { CanonicalEventKind } from "./canonical.ts";
 import type { SessionReconciliation } from "./store.ts";
 
@@ -43,7 +40,10 @@ function selectDeltaMessages(
 		.filter((message): message is ChatMessage => message !== undefined);
 }
 
-function continuationReminder(body: ChatCompletionRequest, reconciliation: SessionReconciliation): string {
+function continuationReminder(
+	body: ChatCompletionRequest,
+	reconciliation: SessionReconciliation,
+): string {
 	const registry = reconciliation.toolRegistry?.hash
 		? ` Tool registry unchanged: ${reconciliation.toolRegistry.hash.slice(0, 16)}.`
 		: "";
