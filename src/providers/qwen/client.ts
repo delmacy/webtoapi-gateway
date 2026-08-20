@@ -11,6 +11,8 @@ import { parseQwenStream } from "./stream.ts";
 
 const QWEN_WEB_VERSION = "0.2.83";
 const QWEN_FALLBACK_ORIGIN = "https://chat.qwen.ai";
+const QWEN_CREATE_TIMEOUT_MS = 30_000;
+const QWEN_STREAM_IDLE_TIMEOUT_MS = 45_000;
 
 export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 	readonly providerId = "qwen-web";
@@ -55,22 +57,18 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
 		const initialRuntime = this.getRuntimeTarget();
-		const createChatTimeoutMs = 30_000;
 		const createRequestId = crypto.randomUUID();
+
 		const createChatResult = await page.evaluate(
 			async ({ baseUrl, timeoutMs, model, requestId, version }) => {
-				let timer: ReturnType<typeof setTimeout> | undefined;
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), timeoutMs);
 				try {
-					const url = `${baseUrl}/api/v2/chats/new`;
-					const controller = new AbortController();
-					timer = setTimeout(() => controller.abort(), timeoutMs);
-					const res = await fetch(url, {
+					const res = await fetch(`${baseUrl}/api/v2/chats/new`, {
 						method: "POST",
 						headers: {
-							Accept: "application/json",
+							Accept: "application/json, text/plain, */*",
 							"Content-Type": "application/json",
-							Origin: baseUrl,
-							Referer: `${baseUrl}/`,
 							source: "web",
 							version,
 							"x-request-id": requestId,
@@ -86,8 +84,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						signal: controller.signal,
 					});
 					if (!res.ok) {
-						const errorText = await res.text();
-						return { ok: false as const, status: res.status, error: errorText };
+						return { ok: false as const, status: res.status, error: await res.text() };
 					}
 					const data = await res.json();
 					const chatId = data.data?.id ?? data.chat_id ?? data.id ?? data.chatId;
@@ -101,21 +98,18 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 					return { ok: true as const, chatId };
 				} catch (err) {
 					const msg = String(err);
-					if (msg.includes("aborted") || msg.includes("signal")) {
-						return {
-							ok: false as const,
-							status: 408,
-							error: `Create chat timed out after ${timeoutMs}ms`,
-						};
-					}
-					return { ok: false as const, status: 500, error: msg };
+					return {
+						ok: false as const,
+						status: msg.includes("aborted") ? 408 : 500,
+						error: msg.includes("aborted") ? `Create chat timed out after ${timeoutMs}ms` : msg,
+					};
 				} finally {
-					if (typeof timer !== "undefined") clearTimeout(timer);
+					clearTimeout(timer);
 				}
 			},
 			{
 				baseUrl: initialRuntime.origin,
-				timeoutMs: createChatTimeoutMs,
+				timeoutMs: QWEN_CREATE_TIMEOUT_MS,
 				model: params.model,
 				requestId: createRequestId,
 				version: initialRuntime.version,
@@ -132,62 +126,66 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 
 		const chatId = createChatResult.chatId as string;
 		const runtime = this.getRuntimeTarget(chatId);
-		const fetchTimeoutMs = 300_000;
 		const fid = crypto.randomUUID();
 		const childId = crypto.randomUUID();
 		const requestId = crypto.randomUUID();
+
 		const responseData = await page.evaluate(
-			async ({ baseUrl, completionEndpoint, chatId, model, message, fid, childId, requestId, timeoutMs, version }) => {
-				let timer: ReturnType<typeof setTimeout> | undefined;
-				try {
-					const url = completionEndpoint || `${baseUrl}/api/v2/chat/completions?chat_id=${chatId}`;
-					const controller = new AbortController();
-					timer = setTimeout(() => controller.abort(), timeoutMs);
-					const requestBody = {
-						stream: true,
-						version: "2.1",
-						incremental_output: true,
-						chat_id: chatId,
-						chat_mode: "normal",
-						model,
-						parent_id: null,
-						messages: [
-							{
-								id: null,
-								fid,
-								parentId: null,
-								childrenIds: [childId],
-								role: "user",
-								content: message,
-								user_action: "chat",
-								files: [],
-								timestamp: Date.now(),
-								models: [model],
-								model: "",
-								chat_type: "t2t",
-								feature_config: {
-									thinking_enabled: true,
-									output_schema: "phase",
-									research_mode: "normal",
-									auto_thinking: true,
-									thinking_mode: "Auto",
-									thinking_format: "summary",
-									auto_search: false,
-								},
-								extra: { meta: { subChatType: "t2t" } },
-								sub_chat_type: "t2t",
-								parent_id: null,
+			async ({ baseUrl, completionEndpoint, chatId, model, message, fid, childId, requestId, idleTimeoutMs, version }) => {
+				const requestBody = {
+					stream: true,
+					version: "2.1",
+					incremental_output: true,
+					chat_id: chatId,
+					chat_mode: "normal",
+					model,
+					parent_id: null,
+					messages: [
+						{
+							id: null,
+							fid,
+							parentId: null,
+							childrenIds: [childId],
+							role: "user",
+							content: message,
+							user_action: "chat",
+							files: [],
+							timestamp: Date.now(),
+							models: [model],
+							model: "",
+							chat_type: "t2t",
+							feature_config: {
+								thinking_enabled: true,
+								output_schema: "phase",
+								research_mode: "normal",
+								auto_thinking: true,
+								thinking_mode: "Auto",
+								thinking_format: "summary",
+								auto_search: false,
 							},
-						],
-						timestamp: Date.now(),
-					};
+							extra: { meta: { subChatType: "t2t" } },
+							sub_chat_type: "t2t",
+							parent_id: null,
+						},
+					],
+					timestamp: Date.now(),
+				};
+
+				const controller = new AbortController();
+				let idleTimer: ReturnType<typeof setTimeout> | undefined;
+				const resetIdle = () => {
+					if (idleTimer) clearTimeout(idleTimer);
+					idleTimer = setTimeout(() => controller.abort(), idleTimeoutMs);
+				};
+
+				try {
+					resetIdle();
+					const url = completionEndpoint || `${baseUrl}/api/v2/chat/completions?chat_id=${chatId}`;
 					const res = await fetch(url, {
 						method: "POST",
 						headers: {
-							Accept: "text/event-stream",
+							Accept: "application/json, text/plain, */*",
 							"Content-Type": "application/json",
-							Origin: baseUrl,
-							Referer: `${baseUrl}/`,
 							source: "web",
 							version,
 							"x-request-id": requestId,
@@ -195,37 +193,57 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						body: JSON.stringify(requestBody),
 						signal: controller.signal,
 					});
+
+					const contentType = res.headers.get("content-type") || "";
 					if (!res.ok) {
 						const errorText = await res.text();
-						return { ok: false as const, status: res.status, error: errorText };
+						return {
+							ok: false as const,
+							status: res.status,
+							error: `Qwen HTTP ${res.status} (${contentType || "unknown content-type"}): ${errorText.slice(0, 500)}`,
+						};
 					}
+
 					const reader = res.body?.getReader();
-					if (!reader) return { ok: false as const, status: 500, error: "No response body" };
+					if (!reader) return { ok: false as const, status: 500, error: "Qwen response has no body" };
+
 					const decoder = new TextDecoder();
 					let fullText = "";
+					let bytes = 0;
 					while (true) {
 						const { done, value } = await reader.read();
 						if (done) break;
+						resetIdle();
+						if (value) bytes += value.byteLength;
 						fullText += decoder.decode(value, { stream: true });
 						if (fullText.includes("data: [DONE]")) {
-							await reader.cancel();
+							await reader.cancel().catch(() => {});
 							break;
 						}
 					}
 					fullText += decoder.decode();
-					return { ok: true as const, data: fullText };
+
+					if (!fullText.trim()) {
+						return {
+							ok: false as const,
+							status: 502,
+							error: `Qwen returned HTTP ${res.status} with ${contentType || "unknown content-type"} but no body bytes`,
+						};
+					}
+
+					return { ok: true as const, data: fullText, meta: { status: res.status, contentType, bytes } };
 				} catch (err) {
 					const msg = String(err);
-					if (msg.includes("aborted") || msg.includes("signal")) {
+					if (msg.includes("aborted") || msg.includes("AbortError")) {
 						return {
 							ok: false as const,
 							status: 408,
-							error: `Qwen API request timed out after ${timeoutMs}ms`,
+							error: `Qwen stream idle timeout after ${idleTimeoutMs}ms`,
 						};
 					}
 					return { ok: false as const, status: 500, error: msg };
 				} finally {
-					if (typeof timer !== "undefined") clearTimeout(timer);
+					if (idleTimer) clearTimeout(idleTimer);
 				}
 			},
 			{
@@ -237,11 +255,17 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				fid,
 				childId,
 				requestId,
-				timeoutMs: fetchTimeoutMs,
+				idleTimeoutMs: QWEN_STREAM_IDLE_TIMEOUT_MS,
 				version: runtime.version,
 			},
 		);
 
+		if (responseData.ok && "meta" in responseData) {
+			const meta = responseData.meta as { status: number; contentType: string; bytes: number };
+			console.log(
+				`[QwenWeb] upstream status=${meta.status} contentType=${meta.contentType || "unknown"} bytes=${meta.bytes}`,
+			);
+		}
 		return responseData as EvalResult;
 	}
 
