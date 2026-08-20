@@ -19,6 +19,8 @@
 		"e2e:deepseek-isolation": "bun scripts/e2e-deepseek-isolation.ts",
 		"e2e:chatgpt-stateful": "bun scripts/e2e-chatgpt-stateful.ts",
 		"e2e:chatgpt-dom-isolation": "bun scripts/e2e-chatgpt-dom-isolation.ts",
+		"e2e:qwen-stateful": "bun scripts/e2e-qwen-stateful.ts",
+		"e2e:qwen-isolation": "bun scripts/e2e-qwen-isolation.ts",
 		"build": "bun build index.ts --compile --external chromium-bidi --external electron --outfile token-free-gateway",
 		"bump": "bun scripts/bump-version.ts",
 		"bump:patch": "bun scripts/bump-version.ts patch",
