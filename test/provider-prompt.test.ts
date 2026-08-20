@@ -38,6 +38,8 @@ describe("stateful provider prompt planning", () => {
 		expect(plan.resetSession).toBe(true);
 		expect(plan.prompt).toContain("Read package.json");
 		expect(plan.prompt).toContain("Available tools:");
+		expect(plan.prompt).toContain("external gateway-managed functions");
+		expect(plan.prompt).toContain("do not need to exist as native tools");
 	});
 
 	test("append after a tool call sends only the real tool result, not assistant echo", () => {
