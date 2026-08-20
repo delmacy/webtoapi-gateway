@@ -42,6 +42,8 @@ export interface WebProviderClient {
 		message: string;
 		model?: string;
 		signal?: AbortSignal;
+		/** Stable logical task/session id. Providers may use it for upstream conversation affinity. */
+		sessionId?: string;
 	}): Promise<ReadableStream<Uint8Array>>;
 	parseStream(
 		body: ReadableStream<Uint8Array>,
