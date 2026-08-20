@@ -84,6 +84,11 @@ const SESSION_SCOPED_CAPABILITIES: Record<string, ProviderSessionCapabilities> =
 		deltaPrompts: true,
 		resettable: true,
 	},
+	"kimi-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
 };
 
 /**
@@ -208,7 +213,6 @@ export async function checkAllSessions(): Promise<
 						setTimeout(
 							() => resolve({ valid: false, reason: "session check timed out" }),
 							SESSION_CHECK_TIMEOUT_MS,
-						),
 					),
 				]);
 				results[id] = await race;
