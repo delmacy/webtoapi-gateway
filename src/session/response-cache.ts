@@ -1,9 +1,5 @@
 import type { ChatCompletionRequest, ToolCallOutput } from "../openai/types.ts";
-import {
-	normalizeOpenAiMessages,
-	semanticHash,
-	snapshotToolRegistry,
-} from "./canonical.ts";
+import { normalizeOpenAiMessages, semanticHash, snapshotToolRegistry } from "./canonical.ts";
 
 export interface CachedAgentResponse {
 	content: string | null;
