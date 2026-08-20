@@ -9,6 +9,8 @@ export interface ChatCompletionRequest {
 	temperature?: number;
 	max_tokens?: number;
 	user?: string;
+	/** Gateway extension for explicit logical session affinity across requests. */
+	webtoapi_session_id?: string;
 }
 
 export type ChatMessage = SystemMessage | UserMessage | AssistantMessage | ToolMessage;
