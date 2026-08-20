@@ -1,4 +1,4 @@
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { type BrowserContext, chromium, type Page } from "playwright-core";
 import {
 	getChromeWebSocketUrl,
 	getDefaultCdpUrl,
@@ -23,7 +23,8 @@ const TOOL: ToolDefinition = {
 	type: "function",
 	function: {
 		name: "echo_fixture",
-		description: "Return the supplied value to the caller. Used only by the DOM isolation smoke test.",
+		description:
+			"Return the supplied value to the caller. Used only by the DOM isolation smoke test.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -77,10 +78,16 @@ async function post(
 
 function firstToolCall(json: ChatCompletionResponse, expectedValue: string): ToolCallOutput {
 	const choice = json.choices[0];
-	assert(choice?.finish_reason === "tool_calls", `Expected tool_calls, got ${choice?.finish_reason}`);
+	assert(
+		choice?.finish_reason === "tool_calls",
+		`Expected tool_calls, got ${choice?.finish_reason}`,
+	);
 	const call = choice.message.tool_calls?.[0];
 	assert(call, "Expected one tool call");
-	assert(call.function.name === TOOL.function.name, `Expected ${TOOL.function.name}, got ${call.function.name}`);
+	assert(
+		call.function.name === TOOL.function.name,
+		`Expected ${TOOL.function.name}, got ${call.function.name}`,
+	);
 	const args = JSON.parse(call.function.arguments) as { value?: string };
 	assert(args.value === expectedValue, `Unexpected tool arguments: ${call.function.arguments}`);
 	return call;
@@ -161,7 +168,10 @@ async function newChatGptPageAfter<T>(
 	return { result, page };
 }
 
-async function noNewChatGptPageAfter<T>(context: BrowserContext, action: () => Promise<T>): Promise<T> {
+async function noNewChatGptPageAfter<T>(
+	context: BrowserContext,
+	action: () => Promise<T>,
+): Promise<T> {
 	const before = new Set(context.pages());
 	const result = await action();
 	await Bun.sleep(300);
@@ -197,7 +207,11 @@ async function main(): Promise<void> {
 		await page.route(conversationRoute, async (route) => {
 			if (route.request().method() === "POST") {
 				intercepted += 1;
-				await route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forced-dom-e2e"}' });
+				await route.fulfill({
+					status: 403,
+					contentType: "application/json",
+					body: '{"error":"forced-dom-e2e"}',
+				});
 				return;
 			}
 			await route.continue();
@@ -220,7 +234,10 @@ async function main(): Promise<void> {
 		assert(pageB !== pageA, "Sessions A and B unexpectedly share the same DOM Page object");
 		console.log(`B bootstrap: isolated page=${pageB.url()}`);
 
-		assert(intercepted >= 2, `Expected at least two forced API 403 interceptions, observed ${intercepted}`);
+		assert(
+			intercepted >= 2,
+			`Expected at least two forced API 403 interceptions, observed ${intercepted}`,
+		);
 
 		const finalA = await noNewChatGptPageAfter(context, () =>
 			post(sessionA, continuationBody(initialA, callA, "dom-A-ok")),
@@ -257,7 +274,9 @@ async function main(): Promise<void> {
 			header(reset.result.response, "x-webtoapi-history-epoch") === "2",
 			`Expected session A epoch 2 after divergence, got ${header(reset.result.response, "x-webtoapi-history-epoch")}`,
 		);
-		console.log(`A reset: old A page closed; replacement page=${reset.page.url()}; B page preserved`);
+		console.log(
+			`A reset: old A page closed; replacement page=${reset.page.url()}; B page preserved`,
+		);
 
 		console.log(
 			`PASS: forced 403 -> isolated DOM tabs, sticky per-session continuation, and epoch reset isolation verified for ${runId}`,
@@ -272,6 +291,6 @@ async function main(): Promise<void> {
 main()
 	.then(() => process.exit(0))
 	.catch((error) => {
-		console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+		console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
 		process.exit(1);
 	});
