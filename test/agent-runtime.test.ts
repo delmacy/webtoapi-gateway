@@ -42,7 +42,10 @@ describe("AgentRuntime", () => {
 		};
 		const r = runtime();
 		const a = r.optimize(base);
-		const b = r.optimize({ ...base, messages: [...base.messages, { role: "assistant", content: "ok" }] });
+		const b = r.optimize({
+			...base,
+			messages: [...base.messages, { role: "assistant", content: "ok" }],
+		});
 		expect(a.sessionId).toBe(b.sessionId);
 		expect(b.snapshot.requests).toBe(2);
 	});
