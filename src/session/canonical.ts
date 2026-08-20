@@ -129,8 +129,14 @@ export function normalizeOpenAiMessages(messages: ChatMessage[]): CanonicalEvent
 				break;
 			case "assistant": {
 				const assistant = message as AssistantMessage;
-				if (typeof assistant.content === "string" && assistant.content.length > 0) {
-					push("assistant_message", sourceMessageIndex, { content: assistant.content });
+				const hasContent = typeof assistant.content === "string" && assistant.content.length > 0;
+				const hasReasoning =
+					typeof assistant.reasoning_content === "string" && assistant.reasoning_content.length > 0;
+				if (hasContent || hasReasoning) {
+					push("assistant_message", sourceMessageIndex, {
+						...(hasContent ? { content: assistant.content } : {}),
+						...(hasReasoning ? { reasoningContent: assistant.reasoning_content } : {}),
+					});
 				}
 				for (const call of assistant.tool_calls ?? []) {
 					push("tool_call", sourceMessageIndex, {
