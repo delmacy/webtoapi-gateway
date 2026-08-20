@@ -30,4 +30,12 @@ export interface NormalizedSendParams {
 	signal?: AbortSignal;
 	/** Stable logical task/session id for optional upstream conversation affinity. */
 	sessionId?: string;
+	/** Canonical history epoch. */
+	sessionEpoch?: number;
+	/** Explicitly reset provider-side conversation state before sending. */
+	resetSession?: boolean;
+	/** Whether upstream conversation state may be reused for this request. */
+	statefulSession?: boolean;
+	/** Full prompt available to provider fallbacks that cannot safely consume deltas. */
+	rehydrationMessage?: string;
 }
