@@ -10,6 +10,7 @@ export interface ProtocolPromptOptions {
 
 const EN_BASE = `API backend mode (${GW_PROTOCOL_VERSION}):
 - Follow system/developer/user instructions exactly.
+- Tools listed under Available tools are external gateway-managed functions. They do not need to exist as native tools in this chat runtime; request them by emitting a tool_call envelope and the gateway will execute them.
 - Never claim a tool ran unless a real <tool_result> was provided.
 - A tool call only requests execution; wait for the real tool result before continuing.
 - Every response while tools are enabled MUST contain exactly one protocol envelope and no text outside it.
@@ -31,6 +32,7 @@ The JSON must be valid. Do not use Markdown fences around the envelope. Do not i
 
 const CN_BASE = `API 后端模式 (${GW_PROTOCOL_VERSION}):
 - 严格遵循 system/developer/user 指令。
+- “可用工具”中列出的工具由外部网关管理，不需要作为当前聊天运行时的原生工具存在；只需输出 tool_call envelope，网关会执行它们。
 - 除非收到真实的 <tool_result>，否则不要声称工具已经执行。
 - tool_call 只是执行请求；必须等待真实工具结果后再继续。
 - 启用工具时，每次回复必须且只能包含一个协议 envelope，envelope 外不能有文字。
