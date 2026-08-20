@@ -21,6 +21,8 @@
 		"e2e:chatgpt-dom-isolation": "bun scripts/e2e-chatgpt-dom-isolation.ts",
 		"e2e:qwen-stateful": "bun scripts/e2e-qwen-stateful.ts",
 		"e2e:qwen-isolation": "bun scripts/e2e-qwen-isolation.ts",
+		"e2e:kimi-stateful": "bun scripts/e2e-kimi-stateful.ts",
+		"e2e:kimi-isolation": "bun scripts/e2e-kimi-isolation.ts",
 		"build": "bun build index.ts --compile --external chromium-bidi --external electron --outfile token-free-gateway",
 		"bump": "bun scripts/bump-version.ts",
 		"bump:patch": "bun scripts/bump-version.ts patch",
