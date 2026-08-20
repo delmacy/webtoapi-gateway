@@ -37,7 +37,10 @@ describe("stateful provider prompt planning", () => {
 		expect(plan.statefulSession).toBe(true);
 		expect(plan.resetSession).toBe(true);
 		expect(plan.prompt).toContain("Read package.json");
-		expect(plan.prompt).toContain("Available tools:");
+		expect(plan.prompt).toContain("External action catalog:");
+		expect(plan.prompt).toContain("external metadata");
+		expect(plan.prompt).toContain("do NOT execute it here");
+		expect(plan.prompt).toContain("downstream gateway");
 	});
 
 	test("append after a tool call sends only the real tool result, not assistant echo", () => {
@@ -75,7 +78,7 @@ describe("stateful provider prompt planning", () => {
 		expect(plan.prompt).toContain('{"name":"gateway"}');
 		expect(plan.prompt).not.toContain("Human: Read package.json");
 		expect(plan.prompt).not.toContain("[Called tools]");
-		expect(plan.prompt).not.toContain("Available tools:");
+		expect(plan.prompt).not.toContain("External action catalog:");
 		expect(plan.prompt).toContain("continuation");
 	});
 
@@ -102,7 +105,7 @@ describe("stateful provider prompt planning", () => {
 		});
 		expect(plan.mode).toBe("delta");
 		expect(reconciliation.toolRegistryChanged).toBe(true);
-		expect(plan.prompt).toContain("Available tools:");
+		expect(plan.prompt).toContain("External action catalog:");
 		expect(plan.prompt).toContain('"exec"');
 		expect(plan.prompt).not.toContain("Human: Read package.json");
 	});

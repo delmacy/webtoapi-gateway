@@ -76,7 +76,7 @@ const SESSION_SCOPED_CAPABILITIES: Record<string, ProviderSessionCapabilities> =
 	},
 	"chatgpt-web": {
 		persistentConversation: true,
-		deltaPrompts: false,
+		deltaPrompts: true,
 		resettable: true,
 	},
 };
