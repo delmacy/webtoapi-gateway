@@ -1,11 +1,9 @@
 /**
  * Dynamic tool prompt generation from OpenAI function definitions.
  *
- * The original project serialized complete JSON schemas on every tool turn.
- * Agentic clients such as OpenCode resend those schemas repeatedly, so this
- * module renders an equivalent compact signature while preserving the fields
- * that matter most for correct calls: name, required parameters, types,
- * enums, arrays, nested object shape, and a bounded description.
+ * Optimized mode renders compact signatures to reduce repeated context in
+ * agentic clients. Passthrough mode can still request the original full JSON
+ * schema representation for compatibility/debugging.
  */
 
 import type { ToolDefinition } from "../openai/types.ts";
@@ -56,7 +54,18 @@ function renderToolSignature(tool: ToolDefinition): string {
 	return `"${tool.function.name}"(${args.join(", ")})${description}`;
 }
 
-export function toolDefsForPrompt(tools: ToolDefinition[]): string {
+export function toolDefsForPrompt(tools: ToolDefinition[], compact = true): string {
+	if (!compact) {
+		return JSON.stringify(
+			tools.map((t) => ({
+				name: t.function.name,
+				description: t.function.description || "",
+				parameters: t.function.parameters || {},
+			})),
+			null,
+			2,
+		);
+	}
 	return tools.map(renderToolSignature).join("\n");
 }
 
@@ -76,14 +85,16 @@ export function buildToolPrompt(
 	tools: ToolDefinition[],
 	lang: "en" | "cn" = "en",
 	forceUse = false,
+	compact = true,
 ): string {
-	const defs = toolDefsForPrompt(tools);
+	const defs = toolDefsForPrompt(tools, compact);
 
 	if (lang === "cn") {
 		const forceHint = forceUse
 			? "\n\n重要：你必须使用上述工具之一来回应。请不要直接用文字回答，必须调用工具。"
 			: "";
-		return `你可以使用以下工具。签名中 ! 表示必填参数，? 表示可选参数。当需要使用工具时，只返回tool_json代码块，不要包含其他文字。
+		const signatureHint = compact ? "签名中 ! 表示必填参数，? 表示可选参数。" : "";
+		return `你可以使用以下工具。${signatureHint}当需要使用工具时，只返回tool_json代码块，不要包含其他文字。
 
 可用工具:
 ${defs}
@@ -98,7 +109,8 @@ ${TOOL_EXAMPLE_CN}
 	const forceHint = forceUse
 		? "\n\nIMPORTANT: You MUST use one of the tools above. Do NOT answer with plain text."
 		: "";
-	return `You have access to the following tools. In signatures, ! means required and ? means optional. When you need a tool, reply ONLY with a tool_json code block, no other text.
+	const signatureHint = compact ? " In signatures, ! means required and ? means optional." : "";
+	return `You have access to the following tools.${signatureHint} When you need a tool, reply ONLY with a tool_json code block, no other text.
 
 Available tools:
 ${defs}
