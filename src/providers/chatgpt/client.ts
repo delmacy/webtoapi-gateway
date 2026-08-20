@@ -8,7 +8,7 @@ import { parseCookieHeader } from "../shared/cookie-parser.ts";
 import { throwIfSessionExpired } from "../shared/error-guard.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import { textToStream } from "../shared/stream-helpers.ts";
-import type { StreamResult } from "../types.ts";
+import type { ProviderSendParams, StreamResult } from "../types.ts";
 import { withTimeout } from "../types.ts";
 import type { ChatGPTWebAuth } from "./auth.ts";
 import { parseChatGPTStream } from "./stream.ts";
@@ -34,6 +34,8 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 	private cookie: string;
 	private conversationId: string | undefined;
 	private parentMessageId: string | undefined;
+	private domPage: Page | null = null;
+	private forceDom = false;
 
 	constructor(auth: ChatGPTWebAuth) {
 		super(auth);
@@ -59,20 +61,19 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 		console.log("[ChatGPT Web] Connecting via BrowserManager...");
 		this.page = await bm.getPage(this.config.hostKey, this.config.startUrl);
 		console.log(`[ChatGPT Web] Using page: ${this.page.url()}`);
-		await this.ensureChatGptPageReady();
+		await this.ensureChatGptPageReady(this.page);
 		console.log("[ChatGPT Web] Connected to Chrome successfully");
 		const cookies = this.getCookies();
 		if (cookies.length > 0) await bm.addCookies(cookies);
 		return this.page;
 	}
 
-	private async ensureChatGptPageReady() {
-		if (!this.page) return;
-		if (!this.page.url().includes("chatgpt.com")) {
-			await this.page.goto("https://chatgpt.com/", { waitUntil: "load" });
+	private async ensureChatGptPageReady(page: Page): Promise<void> {
+		if (!page.url().includes("chatgpt.com")) {
+			await page.goto("https://chatgpt.com/", { waitUntil: "load" });
 		}
 		try {
-			await this.page.waitForFunction(
+			await page.waitForFunction(
 				() => {
 					const scripts = Array.from(document.scripts);
 					return scripts.some((s) => s.src?.includes("oaistatic.com") && s.src?.endsWith(".js"));
@@ -83,6 +84,28 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 			console.warn("[ChatGPT Web] oaistatic script not found in 15s, continuing anyway");
 		}
 		await new Promise((r) => setTimeout(r, 2000));
+	}
+
+	private async getDomPage(): Promise<Page> {
+		if (this.domPage && !this.domPage.isClosed()) {
+			try {
+				await this.domPage.evaluate(() => document.readyState);
+				return this.domPage;
+			} catch {
+				this.domPage = null;
+			}
+		}
+
+		const bm = BrowserManager.getInstance();
+		const cookies = this.getCookies();
+		if (cookies.length > 0) await bm.addCookies(cookies);
+		const target = this.conversationId
+			? `https://chatgpt.com/c/${this.conversationId}`
+			: this.config.startUrl;
+		this.domPage = await bm.createPage(target);
+		await this.ensureChatGptPageReady(this.domPage);
+		console.log(`[ChatGPT Web] Created isolated DOM page: ${this.domPage.url()}`);
+		return this.domPage;
 	}
 
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
@@ -242,27 +265,29 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 
 	/**
 	 * Override sendMessage for custom error handling:
-	 * - 403 → DOM fallback
+	 * - 403 → sticky isolated DOM fallback
 	 * - 401 → SessionExpiredError
 	 * - sentinelError hint
 	 */
-	override async sendMessage(params: {
-		message: string;
-		model?: string;
-		signal?: AbortSignal;
-	}): Promise<ReadableStream<Uint8Array>> {
+	override async sendMessage(params: ProviderSendParams): Promise<ReadableStream<Uint8Array>> {
+		if (this.forceDom) {
+			return this.chatCompletionsViaDOM({ message: params.message, signal: params.signal });
+		}
+
 		const page = await this.getPage();
 		const normalized: NormalizedSendParams = {
 			message: params.message,
 			model: params.model || this.config.defaultModel,
 			signal: params.signal,
+			sessionId: params.sessionId,
 		};
 		const responseData = (await this.callApi(page, normalized)) as EvalResult & {
 			sentinelError?: string;
 		};
 		if (!responseData.ok) {
 			if (responseData.status === 403) {
-				console.log("[ChatGPT Web] 403 from API, falling back to DOM simulation");
+				this.forceDom = true;
+				console.log("[ChatGPT Web] 403 from API, switching this session to isolated DOM mode");
 				return this.chatCompletionsViaDOM({ message: params.message, signal: params.signal });
 			}
 			throwIfSessionExpired(
@@ -314,11 +339,32 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 		}
 	}
 
+	override async close(): Promise<void> {
+		if (this.domPage && !this.domPage.isClosed()) {
+			await this.domPage.close().catch(() => {});
+		}
+		this.domPage = null;
+		this.forceDom = false;
+		await super.close();
+	}
+
 	private async chatCompletionsViaDOM(params: {
 		message: string;
 		signal?: AbortSignal;
 	}): Promise<ReadableStream<Uint8Array>> {
-		const page = await this.getPage();
+		const page = await this.getDomPage();
+		const assistantSelector =
+			'div[data-message-author-role="assistant"], .agent-turn [data-message-author-role="assistant"], [class*="markdown"], [class*="assistant"]';
+		const baseline = await page.evaluate((selector) => {
+			const clean = (text: string) => text.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+			const elements = document.querySelectorAll(selector);
+			const last = elements.length > 0 ? elements[elements.length - 1] : null;
+			return {
+				count: elements.length,
+				text: last ? clean(last.textContent ?? "") : "",
+			};
+		}, assistantSelector);
+
 		const inputSelectors = [
 			"#prompt-textarea",
 			"textarea[placeholder]",
@@ -341,32 +387,48 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 		const pollIntervalMs = 2000;
 		let lastText = "";
 		let stableCount = 0;
+		let sawNewTurn = false;
 		for (let elapsed = 0; elapsed < maxWaitMs; elapsed += pollIntervalMs) {
 			if (params.signal?.aborted) throw new Error("ChatGPT request cancelled");
 			await new Promise((r) => setTimeout(r, pollIntervalMs));
-			const result = await page.evaluate(() => {
-				const clean = (t: string) => t.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
-				const els = document.querySelectorAll(
-					'div[data-message-author-role="assistant"], .agent-turn [data-message-author-role="assistant"], [class*="markdown"], [class*="assistant"]',
-				);
-				const last = els.length > 0 ? els[els.length - 1] : null;
+			const result = await page.evaluate((selector) => {
+				const clean = (text: string) => text.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+				const elements = document.querySelectorAll(selector);
+				const last = elements.length > 0 ? elements[elements.length - 1] : null;
 				const text = last ? clean(last.textContent ?? "") : "";
 				const stopBtn = document.querySelector('button.bg-black .icon-lg, [aria-label*="Stop"]');
-				return { text, isStreaming: !!stopBtn };
-			});
+				return { count: elements.length, text, isStreaming: !!stopBtn };
+			}, assistantSelector);
+
+			if (!sawNewTurn) {
+				sawNewTurn = result.count > baseline.count || (Boolean(result.text) && result.text !== baseline.text);
+				if (!sawNewTurn) continue;
+			}
+
 			if (result.text && result.text !== lastText) {
 				lastText = result.text;
 				stableCount = 0;
 			} else if (result.text) {
-				stableCount++;
+				stableCount += 1;
 				if (!result.isStreaming && stableCount >= 2) break;
 			}
 		}
 		if (!lastText)
 			throw new Error(
-				"ChatGPT DOM simulation: no assistant reply detected. Ensure chatgpt.com is open, logged in, and the input is visible.",
+				"ChatGPT DOM simulation: no new assistant reply detected. Ensure the isolated chat tab is logged in and the input is visible.",
 			);
-		const fakeSse = `data: ${JSON.stringify({ message: { id: "dom-fallback", content: { parts: [lastText] } } })}\n\ndata: [DONE]\n\n`;
+
+		const conversationMatch = page.url().match(/\/c\/([^/?#]+)/);
+		const conversationId = conversationMatch?.[1];
+		if (conversationId) this.conversationId = conversationId;
+		const fakeSse = `data: ${JSON.stringify({
+			...(conversationId ? { conversation_id: conversationId } : {}),
+			message: {
+				id: `dom-${randomUUID()}`,
+				author: { role: "assistant" },
+				content: { parts: [lastText] },
+			},
+		})}\n\ndata: [DONE]\n\n`;
 		return textToStream(fakeSse);
 	}
 }
