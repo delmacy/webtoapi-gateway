@@ -17,6 +17,39 @@ export interface BrowserCookie {
 	secure?: boolean;
 }
 
+export type PlaywrightCookie = {
+	name: string;
+	value: string;
+	domain?: string;
+	path?: string;
+	url?: string;
+	secure?: boolean;
+};
+
+/**
+ * Convert cookie-header shaped entries to Playwright/CDP-safe cookie objects.
+ * `__Host-` cookies must be host-only, Secure, and rooted at `/`; using `url`
+ * rather than `domain` preserves that invariant. `__Secure-` cookies must be Secure.
+ */
+export function normalizeBrowserCookie(cookie: BrowserCookie): PlaywrightCookie {
+	const host = cookie.domain.replace(/^\./, "");
+	if (cookie.name.startsWith("__Host-")) {
+		return {
+			name: cookie.name,
+			value: cookie.value,
+			url: `https://${host}/`,
+			secure: true,
+		};
+	}
+	return {
+		name: cookie.name,
+		value: cookie.value,
+		domain: cookie.domain,
+		path: cookie.path,
+		secure: cookie.secure === true || cookie.name.startsWith("__Secure-"),
+	};
+}
+
 class BrowserManager {
 	private static instance: BrowserManager | null = null;
 
@@ -70,13 +103,52 @@ class BrowserManager {
 	}
 
 	async addCookies(cookies: BrowserCookie[]): Promise<void> {
+		if (cookies.length === 0) return;
 		const ctx = await this.getContext();
-		if (cookies.length > 0) {
-			try {
-				await ctx.addCookies(cookies);
-			} catch (err) {
+		const normalized = cookies.map(normalizeBrowserCookie);
+		const urls = [
+			...new Set(
+				cookies
+					.map((cookie) => cookie.domain.replace(/^\./, ""))
+					.filter(Boolean)
+					.map((host) => `https://${host}/`),
+			),
+		];
+
+		// When connected to the user's already-authenticated Chrome context, these
+		// cookies usually already exist. Avoid rewriting them: apart from being
+		// redundant, flattening a Cookie header loses host-only/SameSite metadata.
+		let missing = normalized;
+		try {
+			const existing = urls.length > 0 ? await ctx.cookies(urls) : [];
+			missing = normalized.filter(
+				(cookie) =>
+					!existing.some(
+						(current) => current.name === cookie.name && current.value === cookie.value,
+					),
+			);
+		} catch {
+			// If inspection fails, fall through to normalized injection.
+		}
+		if (missing.length === 0) return;
+
+		try {
+			await ctx.addCookies(missing);
+		} catch (err) {
+			// A single provider-specific cookie should not poison the whole batch.
+			// Retry individually so valid cookies are retained and diagnostics name
+			// only the entries Chrome actually rejects.
+			const rejected: string[] = [];
+			for (const cookie of missing) {
+				try {
+					await ctx.addCookies([cookie]);
+				} catch {
+					rejected.push(cookie.name);
+				}
+			}
+			if (rejected.length > 0) {
 				console.warn(
-					`[BrowserManager] addCookies failed: ${err instanceof Error ? err.message : String(err)}`,
+					`[BrowserManager] addCookies rejected ${rejected.join(", ")}: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
 		}
