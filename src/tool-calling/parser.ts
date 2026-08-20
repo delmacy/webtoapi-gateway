@@ -14,14 +14,24 @@ export interface ParsedToolCall {
 	arguments: Record<string, unknown>;
 }
 
-const FENCED_REGEX = /```tool_json\s*\n?\s*(\{[\s\S]*\})\s*\n?\s*```/;
+const FENCED_REGEX = /```tool_json\s*\n?\s*([\s\S]*?)\s*```/;
 const BARE_JSON_REGEX = /\{\s*"tool"\s*:\s*"([^"]+)"\s*,\s*"parameters"\s*:\s*(\{[\s\S]*?\})\s*\}/;
 const XML_TOOL_REGEX = /<tool_call[^>]*>([\s\S]*?)<\/tool_call>/;
 const OPENAI_TOOL_CALLS_REGEX =
 	/\{\s*"tool_calls"\s*:\s*\[\s*(\{[\s\S]*?\})\s*(?:,[\s\S]*?)?\]\s*\}/;
 
 export function extractToolCalls(text: string): ParsedToolCall[] {
-	// Try extracting multiple XML tool_calls first
+	// Prefer fenced tool_json and execute only the first valid call. Web models
+	// sometimes emit speculative later tool calls and fake tool results in the
+	// same response; returning the first call forces the real tool result to
+	// come back from the client before the model can continue.
+	const fencedMatches = [...text.matchAll(/```tool_json\s*\n?\s*([\s\S]*?)\s*```/g)];
+	for (const match of fencedMatches) {
+		const parsed = parseToolJson(match[1] ?? "");
+		if (parsed) return [parsed];
+	}
+
+	// Try extracting multiple XML tool_calls next
 	const xmlMatches = [...text.matchAll(/<tool_call[^>]*>([\s\S]*?)<\/tool_call>/g)];
 	if (xmlMatches.length > 0) {
 		const calls: ParsedToolCall[] = [];
@@ -38,7 +48,8 @@ export function extractToolCalls(text: string): ParsedToolCall[] {
 }
 
 export function extractSingleToolCall(text: string): ParsedToolCall | null {
-	// 1. Fenced code block
+	// 1. Fenced code block. The capture stops at the closing fence rather than
+	// greedily consuming later tool_json/tool_result content.
 	const fenced = FENCED_REGEX.exec(text);
 	if (fenced?.[1]) return parseToolJson(fenced[1]);
 
