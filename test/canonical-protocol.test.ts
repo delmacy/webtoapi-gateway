@@ -6,7 +6,12 @@ import {
 	parseGatewayEnvelope,
 } from "../src/protocol/parser.ts";
 import { validateToolArguments } from "../src/protocol/schema-validator.ts";
-import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "../src/protocol/types.ts";
+import {
+	GatewayProtocolError,
+	type GatewayProtocolErrorCode,
+	GW_JSON_END,
+	GW_JSON_START,
+} from "../src/protocol/types.ts";
 
 const EXEC_TOOL: ToolDefinition = {
 	type: "function",
@@ -29,7 +34,10 @@ function envelope(value: unknown): string {
 	return `${GW_JSON_START}\n${JSON.stringify(value)}\n${GW_JSON_END}`;
 }
 
-function expectProtocolError(fn: () => unknown, code: string): GatewayProtocolError {
+function expectProtocolError(
+	fn: () => unknown,
+	code: GatewayProtocolErrorCode,
+): GatewayProtocolError {
 	try {
 		fn();
 		throw new Error("Expected GatewayProtocolError");
