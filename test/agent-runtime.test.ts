@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { AgentRuntime } from "../src/agent/runtime.ts";
 import type { ChatCompletionRequest } from "../src/openai/types.ts";
 
-function runtime() {
+function runtime(mode: "optimized" | "passthrough" = "optimized") {
 	return new AgentRuntime({
-		mode: "optimized",
+		mode,
 		sessionIdleTtlSec: 3600,
 		maxToolTurns: 3,
 		maxIdenticalToolCalls: 2,
@@ -67,5 +67,32 @@ describe("AgentRuntime", () => {
 		const result = runtime().optimize(body);
 		expect(result.rejection?.status).toBe(409);
 		expect(result.rejection?.message).toContain("identical tool call");
+	});
+
+	test("passthrough does not compact or reject agent loops", () => {
+		const longResult = "z".repeat(2000);
+		const body: ChatCompletionRequest = {
+			model: "qwen-test",
+			messages: [
+				{ role: "user", content: "repeat read" },
+				{ role: "tool", tool_call_id: "old", content: longResult },
+				...Array.from({ length: 4 }, (_, i) => ({
+					role: "assistant" as const,
+					tool_calls: [
+						{
+							id: `call_${i}`,
+							type: "function" as const,
+							function: { name: "read", arguments: '{"filePath":"a.ts"}' },
+						},
+					],
+				})),
+			],
+		};
+		const result = runtime("passthrough").optimize(body);
+		expect(result.rejection).toBeUndefined();
+		expect(result.body).toBe(body);
+		expect(result.body.messages[1]?.role === "tool" ? result.body.messages[1].content : "").toBe(
+			longResult,
+		);
 	});
 });
