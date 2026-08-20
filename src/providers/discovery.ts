@@ -45,6 +45,8 @@ const RULES: DiscoveryRule[] = [
 	},
 ];
 
+const watchedPages = new WeakSet<Page>();
+
 /** Attach metadata-only discovery observers to a provider page. */
 export function installProviderDiscovery(page: Page): void {
 	const pageUrl = page.url();
@@ -60,6 +62,8 @@ export function installProviderDiscovery(page: Page): void {
 
 /** Re-check rules after navigation because a blank/new tab may become a provider tab later. */
 export function watchProviderNavigation(page: Page): void {
+	if (watchedPages.has(page)) return;
+	watchedPages.add(page);
 	installProviderDiscovery(page);
 	page.on("domcontentloaded", () => installProviderDiscovery(page));
 }
