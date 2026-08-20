@@ -86,14 +86,24 @@ describe("buildPromptFromMessages", () => {
 		expect(hasTools).toBe(false);
 	});
 
-	test("injects tool definitions when tools provided", () => {
+	test("optimized prompt injects canonical protocol and tool definitions", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
 		const { prompt, hasTools } = buildPromptFromMessages(messages, TOOLS);
 		expect(hasTools).toBe(true);
+		expect(prompt).toContain("GW_AGENT_PROTOCOL/1");
+		expect(prompt).toContain("<<<GW_JSON>>>");
 		expect(prompt).toContain("Available tools:");
 		expect(prompt).toContain('"exec"');
 		expect(prompt).toContain('"read"');
+		expect(prompt).not.toContain("```tool_json");
+	});
+
+	test("passthrough prompt preserves legacy tool_json contract", () => {
+		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
+		const { prompt, hasTools } = buildPromptFromMessages(messages, TOOLS, "auto", false);
+		expect(hasTools).toBe(true);
 		expect(prompt).toContain("tool_json");
+		expect(prompt).not.toContain("GW_AGENT_PROTOCOL/1");
 	});
 
 	test("tool_choice none disables tools", () => {
@@ -103,11 +113,11 @@ describe("buildPromptFromMessages", () => {
 		expect(prompt).not.toContain("Available tools:");
 	});
 
-	test("tool_choice required adds force hint", () => {
+	test("tool_choice required adds canonical force hint", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
 		const { prompt, hasTools } = buildPromptFromMessages(messages, TOOLS, "required");
 		expect(hasTools).toBe(true);
-		expect(prompt).toContain("MUST use one of the tools");
+		expect(prompt).toContain("MUST call one of the available tools");
 	});
 
 	test("tool_choice specific function filters tools", () => {
@@ -147,6 +157,7 @@ describe("buildPromptFromMessages", () => {
 			{ role: "tool", tool_call_id: "call_1", content: "file1.txt\nfile2.txt" },
 		];
 		const { prompt } = buildPromptFromMessages(messages, TOOLS);
+		expect(prompt).toContain('"type":"tool_call"');
 		expect(prompt).toContain("exec");
 		expect(prompt).toContain("<tool_result");
 		expect(prompt).toContain("call_1");
@@ -168,16 +179,16 @@ describe("buildPromptFromMessages", () => {
 			},
 			{ role: "tool", tool_call_id: "call_1", content: "file1.txt\nfile2.txt" },
 		];
-		// When tools are not re-sent (step 4), still formats correctly
 		const { prompt } = buildPromptFromMessages(messages);
 		expect(prompt).toContain("file1.txt");
-		expect(prompt).toContain("answer");
+		expect(prompt).toContain("Continue the task");
 	});
 
 	test("detects Chinese language and uses CN prompt", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "列出当前目录的文件" }];
 		const { prompt } = buildPromptFromMessages(messages, TOOLS);
 		expect(prompt).toContain("可用工具:");
+		expect(prompt).toContain("GW_AGENT_PROTOCOL/1");
 	});
 
 	test("handles legacy function role", () => {
@@ -199,7 +210,7 @@ describe("parseToolResponse", () => {
 		expect(result.toolCalls).toBeUndefined();
 	});
 
-	test("parses tool_json response into tool_calls", () => {
+	test("parses legacy tool_json response into tool_calls", () => {
 		const text = '```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```';
 		const result = parseToolResponse(text, TOOLS);
 		expect(result.finishReason).toBe("tool_calls");
@@ -216,20 +227,20 @@ describe("parseToolResponse", () => {
 		expect(result.content).toBeNull();
 	});
 
-	test("tool_call ids use random format", () => {
+	test("legacy tool_call ids use random format", () => {
 		const text = '```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```';
 		const result = parseToolResponse(text, TOOLS);
 		expect(result.toolCalls?.[0]?.id).toMatch(/^call_[a-f0-9]+$/);
 	});
 
-	test("ignores tool calls for tools not in the request", () => {
+	test("legacy parser ignores tool calls for tools not in the request", () => {
 		const text = '```tool_json\n{"tool":"unknown_tool","parameters":{}}\n```';
 		const result = parseToolResponse(text, TOOLS);
 		expect(result.finishReason).toBe("stop");
 		expect(result.toolCalls).toBeUndefined();
 	});
 
-	test("returns stop when no tools requested", () => {
+	test("legacy parser returns stop when no tools requested", () => {
 		const text = '```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```';
 		const result = parseToolResponse(text, undefined);
 		expect(result.finishReason).toBe("stop");
