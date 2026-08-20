@@ -401,7 +401,8 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 			}, assistantSelector);
 
 			if (!sawNewTurn) {
-				sawNewTurn = result.count > baseline.count || (Boolean(result.text) && result.text !== baseline.text);
+				sawNewTurn =
+					result.count > baseline.count || (Boolean(result.text) && result.text !== baseline.text);
 				if (!sawNewTurn) continue;
 			}
 
