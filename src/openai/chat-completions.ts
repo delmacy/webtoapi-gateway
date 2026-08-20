@@ -1,5 +1,6 @@
 import { type FairUsePolicy, fairUseGovernor } from "../agent/governor.ts";
 import { type AgentMode, type AgentRuntimeConfig, agentRuntime } from "../agent/runtime.ts";
+import { GatewayProtocolError } from "../protocol/types.ts";
 import { evictProviderClient } from "../providers/registry.ts";
 import type { WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
@@ -104,7 +105,7 @@ async function handleNonStreaming(
 		const stream = await client.sendMessage({ message: prompt, model, sessionId });
 		const result = await client.parseStream(stream);
 		const { content, toolCalls, finishReason } = hasTools
-			? parseToolResponse(result.text, body.tools)
+			? parseToolResponse(result.text, body.tools, _agentMode === "optimized")
 			: { content: result.text, toolCalls: undefined, finishReason: "stop" as const };
 		const promptTokens = estimateTokens(prompt);
 		const completionTokens = estimateTokens(result.text);
@@ -140,6 +141,12 @@ type SseWriter = {
 	done(): void;
 	error(message: string): void;
 	close(): void;
+};
+
+type ParsedToolResponse = {
+	content: string | null;
+	toolCalls: ToolCallOutput[] | undefined;
+	finishReason: "stop" | "tool_calls";
 };
 
 function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>): SseWriter {
@@ -195,13 +202,28 @@ async function handleStreaming(
 		return providerErrorResponse(err, "streaming (pre-stream)");
 	}
 
+	let bufferedToolResponse: ParsedToolResponse | undefined;
+	if (hasTools) {
+		try {
+			const result = await client.parseStream(providerStream);
+			bufferedToolResponse = parseToolResponse(
+				result.text,
+				body.tools,
+				_agentMode === "optimized",
+			);
+		} catch (err) {
+			release();
+			return providerErrorResponse(err, "streaming (tool protocol)");
+		}
+	}
+
 	const readable = new ReadableStream({
 		async start(controller) {
 			const w = createSseWriter(controller);
 			try {
 				w.writeChunk(id, model, [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]);
 				if (!hasTools) await streamWithoutTools(w, id, model, providerStream, client);
-				else await streamWithTools(w, id, model, providerStream, body, client);
+				else if (bufferedToolResponse) emitBufferedToolResponse(w, id, model, bufferedToolResponse);
 				w.done();
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -230,23 +252,21 @@ async function streamWithoutTools(
 	w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 }
 
-async function streamWithTools(
+function emitBufferedToolResponse(
 	w: SseWriter,
 	id: string,
 	model: string,
-	providerStream: ReadableStream<Uint8Array>,
-	body: ChatCompletionRequest,
-	client: WebProviderClient,
-) {
-	const result = await client.parseStream(providerStream);
-	const { content, toolCalls, finishReason } = parseToolResponse(result.text, body.tools);
-	if (finishReason === "tool_calls" && toolCalls) {
-		emitToolCallDeltas(w, id, model, toolCalls);
+	response: ParsedToolResponse,
+): void {
+	if (response.finishReason === "tool_calls" && response.toolCalls) {
+		emitToolCallDeltas(w, id, model, response.toolCalls);
 		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
-	} else {
-		if (content) w.writeChunk(id, model, [{ index: 0, delta: { content }, finish_reason: null }]);
-		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
+		return;
 	}
+	if (response.content) {
+		w.writeChunk(id, model, [{ index: 0, delta: { content: response.content }, finish_reason: null }]);
+	}
+	w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 }
 
 function withAgentHeaders(response: Response, sessionId: string, savedChars: number): Response {
@@ -265,6 +285,20 @@ function jsonError(message: string, status: number): Response {
 }
 
 function providerErrorResponse(err: unknown, context: string): Response {
+	if (err instanceof GatewayProtocolError) {
+		console.error(`[chat-completions] ${context}: protocol ${err.code}: ${err.message}`);
+		return Response.json(
+			{
+				error: {
+					message: err.message,
+					type: "gateway_protocol_error",
+					code: err.code,
+					...(err.details === undefined ? {} : { details: err.details }),
+				},
+			},
+			{ status: 502 },
+		);
+	}
 	if (err instanceof SessionExpiredError) {
 		evictProviderClient(err.providerId);
 		console.error(
