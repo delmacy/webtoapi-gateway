@@ -14,6 +14,7 @@ import {
 	listAllModels,
 	resolveModelToProvider,
 } from "./providers/registry.ts";
+import { runtimeProfiles } from "./providers/runtime-profile.ts";
 
 const config = loadConfig();
 setRouteTimeoutSec(config.requestTimeoutSec);
@@ -58,7 +59,6 @@ async function handleRequest(req: Request): Promise<Response> {
 		return new Response(null, { status: 204, headers: CORS_HEADERS });
 	}
 
-	// Health check is public — no auth required (load balancers, monitoring)
 	if (pathname === "/health" || pathname === "/healthz") {
 		return withCors(await handleHealthRoute());
 	}
@@ -92,8 +92,6 @@ async function handleRequest(req: Request): Promise<Response> {
 	);
 }
 
-// ── Route handlers ───────────────────────────────────────────
-
 async function handleHealthRoute(): Promise<Response> {
 	const authorized = listAuthorizedProviders();
 	const browserHealthy = await BrowserManager.getInstance().isHealthy();
@@ -107,6 +105,7 @@ async function handleHealthRoute(): Promise<Response> {
 		providers: authorized.length,
 		models: (await listAllModels()).length,
 		sessions,
+		runtimeDiscovery: runtimeProfiles.all(),
 		agent: {
 			mode: config.agentMode,
 			activeSessions: agentSessions.length,
@@ -175,13 +174,9 @@ async function handleModelByIdRoute(modelId: string): Promise<Response> {
 	});
 }
 
-// ── Server bootstrap ─────────────────────────────────────────
-
 const server = Bun.serve({
 	port: config.port,
 	fetch: handleRequest,
-	// Disable Bun's built-in idle timeout (default 10s).
-	// Route-level timeouts are managed by handleChatCompletions via Promise.race.
 	idleTimeout: 0,
 });
 
