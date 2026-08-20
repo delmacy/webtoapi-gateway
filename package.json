@@ -8,6 +8,7 @@
 	"scripts": {
 		"dev": "bun --hot index.ts",
 		"start": "bun index.ts",
+		"start:proxy": "bun scripts/opencode-proxy.ts",
 		"test": "bun test",
 		"check": "bun x @biomejs/biome check --write .",
 		"lint": "bun x @biomejs/biome lint .",
