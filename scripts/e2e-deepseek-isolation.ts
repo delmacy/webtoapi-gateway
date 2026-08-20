@@ -16,7 +16,8 @@ const TOOL: ToolDefinition = {
 	type: "function",
 	function: {
 		name: "echo_fixture",
-		description: "Return the supplied value to the caller for a DeepSeek session isolation smoke test.",
+		description:
+			"Return the supplied value to the caller for a DeepSeek session isolation smoke test.",
 		parameters: {
 			type: "object",
 			properties: { value: { type: "string" } },
@@ -57,7 +58,10 @@ async function post(
 }
 
 function expectStateful(response: Response, relation: string, mode: string): void {
-	assert(header(response, "x-webtoapi-session-source") === "override", "Expected override session source");
+	assert(
+		header(response, "x-webtoapi-session-source") === "override",
+		"Expected override session source",
+	);
 	assert(header(response, "x-webtoapi-stateful") === "true", "Expected stateful DeepSeek session");
 	assert(
 		header(response, "x-webtoapi-history-relation") === relation,
@@ -119,7 +123,8 @@ function continuationBody(
 				content: JSON.stringify({
 					ok: true,
 					value: finalValue,
-					instruction: "Return this value exactly in the final answer and request no further action.",
+					instruction:
+						"Return this value exactly in the final answer and request no further action.",
 				}),
 			},
 		],
@@ -150,7 +155,10 @@ const initialB = initialBody("deepseek-B");
 const b = await post(sessionB, initialB);
 expectStateful(b.response, "initial", "full");
 const callB = firstToolCall(b.json, "deepseek-B");
-assert(callA.id !== callB.id, "Sessions A and B unexpectedly received the same gateway tool_call.id");
+assert(
+	callA.id !== callB.id,
+	"Sessions A and B unexpectedly received the same gateway tool_call.id",
+);
 console.log("B bootstrap: independent stateful full prompt");
 
 const finalA = await post(sessionA, continuationBody(initialA, callA, "deepseek-A-ok"));
@@ -183,7 +191,10 @@ console.log("A reset: divergence rehydrated A into epoch 2");
 
 const postResetB: ChatCompletionRequest = {
 	model,
-	messages: [...initialB.messages, { role: "user", content: "Reply only with deepseek-B-still-isolated." }],
+	messages: [
+		...initialB.messages,
+		{ role: "user", content: "Reply only with deepseek-B-still-isolated." },
+	],
 	tools: [TOOL],
 	tool_choice: "auto",
 };
