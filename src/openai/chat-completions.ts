@@ -29,6 +29,7 @@ export interface ChatCompletionHandlerOptions {
 
 type ParsedToolResponse = {
 	content: string | null;
+	reasoningContent?: string;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 };
@@ -99,6 +100,9 @@ function buildCompletionResponse(
 				message: {
 					role: "assistant",
 					content: parsed.content,
+					...(parsed.reasoningContent === undefined
+						? {}
+						: { reasoning_content: parsed.reasoningContent }),
 					...(parsed.toolCalls ? { tool_calls: parsed.toolCalls } : {}),
 				},
 				finish_reason: parsed.finishReason,
@@ -132,6 +136,7 @@ function providerSendParams(
 function cachedParsed(response: CachedAgentResponse): ParsedToolResponse {
 	return {
 		content: response.content,
+		reasoningContent: response.reasoningContent,
 		toolCalls: response.toolCalls,
 		finishReason: response.finishReason,
 	};
@@ -259,7 +264,12 @@ async function handleNonStreaming(
 		const result = await client.parseStream(stream);
 		const parsed = hasTools
 			? parseToolResponse(result.text, body.tools, _agentMode === "optimized")
-			: { content: result.text, toolCalls: undefined, finishReason: "stop" as const };
+			: {
+					content: result.text,
+					reasoningContent: undefined,
+					toolCalls: undefined,
+					finishReason: "stop" as const,
+				};
 		if (execution.cacheEnabled) {
 			agentResponseCache.set(
 				execution.providerId,
@@ -306,6 +316,15 @@ function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>
 	};
 }
 
+function splitArgumentFragments(argumentsJson: string, maxChars = 1024): string[] {
+	if (!argumentsJson) return [""];
+	const fragments: string[] = [];
+	for (let offset = 0; offset < argumentsJson.length; offset += maxChars) {
+		fragments.push(argumentsJson.slice(offset, offset + maxChars));
+	}
+	return fragments;
+}
+
 function emitToolCallDeltas(w: SseWriter, id: string, model: string, toolCalls: ToolCallOutput[]) {
 	for (let i = 0; i < toolCalls.length; i++) {
 		const tc = toolCalls[i];
@@ -317,8 +336,12 @@ function emitToolCallDeltas(w: SseWriter, id: string, model: string, toolCalls: 
 			function: { name: tc.function.name, arguments: "" },
 		};
 		w.writeChunk(id, model, [{ index: 0, delta: { tool_calls: [tcStart] }, finish_reason: null }]);
-		const tcArgs: ToolCallDelta = { index: i, function: { arguments: tc.function.arguments } };
-		w.writeChunk(id, model, [{ index: 0, delta: { tool_calls: [tcArgs] }, finish_reason: null }]);
+		for (const fragment of splitArgumentFragments(tc.function.arguments)) {
+			const tcArgs: ToolCallDelta = { index: i, function: { arguments: fragment } };
+			w.writeChunk(id, model, [
+				{ index: 0, delta: { tool_calls: [tcArgs] }, finish_reason: null },
+			]);
+		}
 	}
 }
 
@@ -421,15 +444,20 @@ function emitBufferedToolResponse(
 	model: string,
 	response: ParsedToolResponse,
 ): void {
-	if (response.finishReason === "tool_calls" && response.toolCalls) {
-		emitToolCallDeltas(w, id, model, response.toolCalls);
-		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
-		return;
+	if (response.reasoningContent) {
+		w.writeChunk(id, model, [
+			{ index: 0, delta: { reasoning_content: response.reasoningContent }, finish_reason: null },
+		]);
 	}
 	if (response.content) {
 		w.writeChunk(id, model, [
 			{ index: 0, delta: { content: response.content }, finish_reason: null },
 		]);
+	}
+	if (response.finishReason === "tool_calls" && response.toolCalls) {
+		emitToolCallDeltas(w, id, model, response.toolCalls);
+		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
+		return;
 	}
 	w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 }
