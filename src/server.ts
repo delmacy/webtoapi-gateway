@@ -118,7 +118,27 @@ async function handleHealthRoute(): Promise<Response> {
 	});
 }
 
+function logOpenCodeHeaders(req: Request): void {
+	const interesting = [
+		"x-opencode-session",
+		"x-opencode-request",
+		"x-opencode-project",
+		"x-opencode-client",
+		"x-webtoapi-session-id",
+		"user-agent",
+	];
+	const values = interesting
+		.map((name) => {
+			const value = req.headers.get(name)?.trim();
+			return value ? `${name}=${value}` : undefined;
+		})
+		.filter((value): value is string => Boolean(value));
+	console.log(`[request-headers] ${values.length > 0 ? values.join(" ") : "no-opencode-session-headers"}`);
+}
+
 async function handleChatCompletionsRoute(req: Request): Promise<Response> {
+	logOpenCodeHeaders(req);
+
 	let body: any;
 	try {
 		body = await req.json();
