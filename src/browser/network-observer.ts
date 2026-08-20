@@ -1,5 +1,5 @@
 import type { Page, Request, Response } from "playwright-core";
-import { runtimeProfiles, type RuntimeTransport } from "../providers/runtime-profile.ts";
+import { type RuntimeTransport, runtimeProfiles } from "../providers/runtime-profile.ts";
 
 export interface NetworkObserverOptions {
 	providerId: string;
@@ -22,7 +22,8 @@ function safeRequestMetadata(request: Request): { requestKeys?: string[]; model?
 		const body = request.postDataJSON();
 		if (!body || typeof body !== "object" || Array.isArray(body)) return {};
 		const record = body as Record<string, unknown>;
-		const model = typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+		const model =
+			typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
 		return {
 			requestKeys: Object.keys(record).slice(0, 32),
 			model,
@@ -49,7 +50,11 @@ function observeRequest(providerId: string, request: Request, transport?: Runtim
 	});
 }
 
-function observeResponse(providerId: string, response: Response, transport?: RuntimeTransport): void {
+function observeResponse(
+	providerId: string,
+	response: Response,
+	transport?: RuntimeTransport,
+): void {
 	const url = response.url();
 	const contentType = response.headers()["content-type"]?.toLowerCase() ?? "";
 	let inferred = transport ?? "unknown";
