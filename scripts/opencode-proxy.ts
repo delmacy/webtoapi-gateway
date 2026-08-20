@@ -2,7 +2,8 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const PORT = Number(process.env.OPENCODE_PROXY_PORT ?? process.env.PROXY_PORT ?? 4567);
-const UPSTREAM = process.env.OPENCODE_PROXY_UPSTREAM ?? process.env.UPSTREAM ?? "https://api.openai.com";
+const UPSTREAM =
+	process.env.OPENCODE_PROXY_UPSTREAM ?? process.env.UPSTREAM ?? "https://api.openai.com";
 const LOG_FILE = resolve(
 	process.env.OPENCODE_PROXY_LOG ?? process.env.LOG_FILE ?? "./logs/opencode-api.jsonl",
 );
@@ -86,7 +87,9 @@ function printRequestSummary(id: number, method: string, url: URL, body: unknown
 		for (const [index, item] of record.messages.entries()) {
 			if (!item || typeof item !== "object") continue;
 			const message = item as Record<string, unknown>;
-			const toolCalls = Array.isArray(message.tool_calls) ? ` tool_calls=${message.tool_calls.length}` : "";
+			const toolCalls = Array.isArray(message.tool_calls)
+				? ` tool_calls=${message.tool_calls.length}`
+				: "";
 			const reasoning = typeof message.reasoning_content === "string" ? " reasoning=yes" : "";
 			console.log(
 				`    ${index}: ${String(message.role ?? "?")}${toolCalls}${reasoning} ${previewContent(message.content)}`,
@@ -211,7 +214,11 @@ function findResponseToolIndex(trace: ResponseTrace, id: unknown): number {
 	return trace.toolCalls.size;
 }
 
-function processResponsesEvent(trace: ResponseTrace, eventType: string, data: Record<string, unknown>): void {
+function processResponsesEvent(
+	trace: ResponseTrace,
+	eventType: string,
+	data: Record<string, unknown>,
+): void {
 	trace.protocol = "responses";
 	incrementEvent(trace, eventType);
 
@@ -239,7 +246,8 @@ function processResponsesEvent(trace: ResponseTrace, eventType: string, data: Re
 		if (item && typeof item === "object") {
 			const value = item as Record<string, unknown>;
 			if (value.type === "function_call") {
-				const index = typeof data.output_index === "number" ? data.output_index : trace.toolCalls.size;
+				const index =
+					typeof data.output_index === "number" ? data.output_index : trace.toolCalls.size;
 				const tool = getToolTrace(trace, index);
 				if (typeof value.call_id === "string") tool.id = value.call_id;
 				else if (typeof value.id === "string") tool.id = value.id;
