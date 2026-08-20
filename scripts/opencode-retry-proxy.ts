@@ -1,5 +1,5 @@
-import { appendFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const FRONT_PORT = Number(process.env.OPENCODE_PROXY_PORT ?? 4567);
@@ -97,7 +97,10 @@ const server = Bun.serve({
 			return errorBody(429, "Injected HTTP 429 for retry inspection");
 		}
 
-		const inspectorUrl = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${INSPECTOR_PORT}`);
+		const inspectorUrl = new URL(
+			`${url.pathname}${url.search}`,
+			`http://127.0.0.1:${INSPECTOR_PORT}`,
+		);
 		const headers = new Headers(request.headers);
 		headers.delete("host");
 		headers.delete("content-length");
