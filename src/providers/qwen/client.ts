@@ -13,6 +13,21 @@ const QWEN_WEB_VERSION = "0.2.83";
 const QWEN_FALLBACK_ORIGIN = "https://chat.qwen.ai";
 const QWEN_CREATE_TIMEOUT_MS = 30_000;
 const QWEN_STREAM_IDLE_TIMEOUT_MS = 45_000;
+const QWEN_EVALUATE_TIMEOUT_MS = 60_000;
+
+function timeoutResult(stage: string, timeoutMs: number): Promise<EvalResult> {
+	return new Promise((resolve) => {
+		setTimeout(
+			() =>
+				resolve({
+					ok: false,
+					status: 408,
+					error: `Qwen ${stage} timed out after ${timeoutMs}ms`,
+				}),
+			timeoutMs,
+		);
+	});
+}
 
 export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 	readonly providerId = "qwen-web";
@@ -58,8 +73,11 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
 		const initialRuntime = this.getRuntimeTarget();
 		const createRequestId = crypto.randomUUID();
+		console.log(
+			`[QwenWeb] stage=create-chat:start model=${params.model} origin=${initialRuntime.origin} version=${initialRuntime.version}`,
+		);
 
-		const createChatResult = await page.evaluate(
+		const createEval = page.evaluate(
 			async ({ baseUrl, timeoutMs, model, requestId, version }) => {
 				const controller = new AbortController();
 				const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -83,9 +101,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						}),
 						signal: controller.signal,
 					});
-					if (!res.ok) {
-						return { ok: false as const, status: res.status, error: await res.text() };
-					}
+					if (!res.ok) return { ok: false as const, status: res.status, error: await res.text() };
 					const data = await res.json();
 					const chatId = data.data?.id ?? data.chat_id ?? data.id ?? data.chatId;
 					if (!chatId) {
@@ -95,13 +111,16 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 							error: `Qwen create-chat returned no chat id: ${JSON.stringify(data).slice(0, 400)}`,
 						};
 					}
-					return { ok: true as const, chatId };
+					return { ok: true as const, chatId: String(chatId) };
 				} catch (err) {
 					const msg = String(err);
 					return {
 						ok: false as const,
-						status: msg.includes("aborted") ? 408 : 500,
-						error: msg.includes("aborted") ? `Create chat timed out after ${timeoutMs}ms` : msg,
+						status: msg.includes("aborted") || msg.includes("AbortError") ? 408 : 500,
+						error:
+							msg.includes("aborted") || msg.includes("AbortError")
+								? `Create chat timed out after ${timeoutMs}ms`
+								: msg,
 					};
 				} finally {
 					clearTimeout(timer);
@@ -116,21 +135,34 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 			},
 		);
 
+		const createChatResult = (await Promise.race([
+			createEval,
+			timeoutResult("create-chat browser evaluation", QWEN_EVALUATE_TIMEOUT_MS),
+		])) as EvalResult & { chatId?: string };
+
 		if (!createChatResult.ok || !createChatResult.chatId) {
+			console.warn(
+				`[QwenWeb] stage=create-chat:error status=${createChatResult.status ?? 500} error=${createChatResult.error ?? "unknown"}`,
+			);
 			return {
 				ok: false,
-				status: (createChatResult as { status?: number }).status ?? 500,
-				error: (createChatResult as { error?: string }).error || "No chat_id in response",
+				status: createChatResult.status ?? 500,
+				error: createChatResult.error || "No chat_id in response",
 			};
 		}
 
-		const chatId = createChatResult.chatId as string;
+		const chatId = createChatResult.chatId;
+		console.log(`[QwenWeb] stage=create-chat:ok chatId=${chatId}`);
+
 		const runtime = this.getRuntimeTarget(chatId);
 		const fid = crypto.randomUUID();
 		const childId = crypto.randomUUID();
 		const requestId = crypto.randomUUID();
+		console.log(
+			`[QwenWeb] stage=completion:start endpoint=${runtime.completionEndpoint ?? `${runtime.origin}/api/v2/chat/completions`} model=${params.model}`,
+		);
 
-		const responseData = await page.evaluate(
+		const completionEval = page.evaluate(
 			async ({ baseUrl, completionEndpoint, chatId, model, message, fid, childId, requestId, idleTimeoutMs, version }) => {
 				const requestBody = {
 					stream: true,
@@ -201,20 +233,27 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 							ok: false as const,
 							status: res.status,
 							error: `Qwen HTTP ${res.status} (${contentType || "unknown content-type"}): ${errorText.slice(0, 500)}`,
+							stage: "headers" as const,
 						};
 					}
 
 					const reader = res.body?.getReader();
-					if (!reader) return { ok: false as const, status: 500, error: "Qwen response has no body" };
+					if (!reader) {
+						return { ok: false as const, status: 500, error: "Qwen response has no body", stage: "headers" as const };
+					}
 
 					const decoder = new TextDecoder();
 					let fullText = "";
 					let bytes = 0;
+					let firstByteAt: number | undefined;
 					while (true) {
 						const { done, value } = await reader.read();
 						if (done) break;
 						resetIdle();
-						if (value) bytes += value.byteLength;
+						if (value) {
+							bytes += value.byteLength;
+							if (!firstByteAt && value.byteLength > 0) firstByteAt = Date.now();
+						}
 						fullText += decoder.decode(value, { stream: true });
 						if (fullText.includes("data: [DONE]")) {
 							await reader.cancel().catch(() => {});
@@ -228,20 +267,26 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 							ok: false as const,
 							status: 502,
 							error: `Qwen returned HTTP ${res.status} with ${contentType || "unknown content-type"} but no body bytes`,
+							stage: firstByteAt ? ("body" as const) : ("first-byte" as const),
 						};
 					}
 
-					return { ok: true as const, data: fullText, meta: { status: res.status, contentType, bytes } };
+					return {
+						ok: true as const,
+						data: fullText,
+						meta: { status: res.status, contentType, bytes, firstByte: Boolean(firstByteAt) },
+					};
 				} catch (err) {
 					const msg = String(err);
 					if (msg.includes("aborted") || msg.includes("AbortError")) {
 						return {
 							ok: false as const,
 							status: 408,
-							error: `Qwen stream idle timeout after ${idleTimeoutMs}ms`,
+							error: `Qwen completion/stream idle timeout after ${idleTimeoutMs}ms`,
+							stage: "completion-or-first-byte" as const,
 						};
 					}
-					return { ok: false as const, status: 500, error: msg };
+					return { ok: false as const, status: 500, error: msg, stage: "completion" as const };
 				} finally {
 					if (idleTimer) clearTimeout(idleTimer);
 				}
@@ -260,12 +305,24 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 			},
 		);
 
-		if (responseData.ok && "meta" in responseData) {
-			const meta = responseData.meta as { status: number; contentType: string; bytes: number };
+		const responseData = (await Promise.race([
+			completionEval,
+			timeoutResult("completion browser evaluation", QWEN_EVALUATE_TIMEOUT_MS),
+		])) as EvalResult & {
+			meta?: { status: number; contentType: string; bytes: number; firstByte: boolean };
+			stage?: string;
+		};
+
+		if (responseData.ok && responseData.meta) {
 			console.log(
-				`[QwenWeb] upstream status=${meta.status} contentType=${meta.contentType || "unknown"} bytes=${meta.bytes}`,
+				`[QwenWeb] stage=completion:ok status=${responseData.meta.status} contentType=${responseData.meta.contentType || "unknown"} bytes=${responseData.meta.bytes} firstByte=${responseData.meta.firstByte}`,
+			);
+		} else {
+			console.warn(
+				`[QwenWeb] stage=${responseData.stage ?? "completion"}:error status=${responseData.status ?? 500} error=${responseData.error ?? "unknown"}`,
 			);
 		}
+
 		return responseData as EvalResult;
 	}
 
