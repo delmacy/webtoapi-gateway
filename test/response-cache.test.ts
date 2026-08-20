@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatCompletionRequest } from "../src/openai/types.ts";
-import {
-	AgentResponseCache,
-	fingerprintChatRequest,
-} from "../src/session/response-cache.ts";
+import { AgentResponseCache, fingerprintChatRequest } from "../src/session/response-cache.ts";
 
 function body(command = "ls"): ChatCompletionRequest {
 	return {
@@ -19,6 +16,7 @@ function body(command = "ls"): ChatCompletionRequest {
 						properties: { command: { type: "string" } },
 					},
 				},
+			},
 		],
 	};
 }
