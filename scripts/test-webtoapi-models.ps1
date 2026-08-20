@@ -18,6 +18,95 @@ function Get-GatewayModels {
     }
 }
 
+function Get-HttpErrorText {
+    param($ErrorRecord)
+
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        return [string]$ErrorRecord.ErrorDetails.Message
+    }
+
+    try {
+        $response = $ErrorRecord.Exception.Response
+        if ($response -and $response.GetResponseStream()) {
+            $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+        }
+    }
+    catch {}
+
+    return [string]$ErrorRecord.Exception.Message
+}
+
+function Invoke-DirectChatTest {
+    param([string]$Model)
+
+    $stage = "LEVEL 1 - Basic chat"
+    Write-Host ""
+    Write-Host "[$Model] $stage"
+    Write-Host ("-" * 70)
+
+    $startedAt = Get-Date
+    $body = @{
+        model = $Model
+        stream = $false
+        messages = @(
+            @{ role = "user"; content = "Responda somente OK" }
+        )
+    } | ConvertTo-Json -Depth 6
+
+    try {
+        $response = Invoke-RestMethod `
+            -Uri "$GatewayUrl/v1/chat/completions" `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $body `
+            -TimeoutSec $TimeoutSec
+
+        $text = ""
+        if ($response.choices -and $response.choices.Count -gt 0) {
+            $text = [string]$response.choices[0].message.content
+        }
+        $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
+
+        if ($text) { Write-Host $text }
+        else { Write-Host "Resposta recebida, mas sem texto em choices[0].message.content" -ForegroundColor Yellow }
+
+        return [PSCustomObject]@{
+            Model       = $Model
+            Stage       = $stage
+            Passed      = -not [string]::IsNullOrWhiteSpace($text)
+            Unavailable = $false
+            ExitCode    = 0
+            Seconds     = $elapsed
+            Output      = $text
+            Error       = ""
+        }
+    }
+    catch {
+        $message = Get-HttpErrorText $_
+        $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
+        $unavailable = $message -match "model_not_available|model isn't available|model is not available|not available right now"
+
+        if ($unavailable) {
+            Write-Host "UNAVAILABLE: $message" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "FAIL: $message" -ForegroundColor Red
+        }
+
+        return [PSCustomObject]@{
+            Model       = $Model
+            Stage       = $stage
+            Passed      = $false
+            Unavailable = $unavailable
+            ExitCode    = $null
+            Seconds     = $elapsed
+            Output      = ""
+            Error       = $message
+        }
+    }
+}
+
 function Quote-PowerShellLiteral {
     param([string]$Value)
 
@@ -49,16 +138,11 @@ function Invoke-OpenCodeTest {
     Write-Host "[$Model] $Stage"
     Write-Host ("-" * 70)
 
-    # On Windows, opencode is commonly installed as an npm/Bun .cmd shim.
-    # ProcessStartInfo with UseShellExecute=false cannot execute a .cmd shim
-    # directly. Launch a child PowerShell and invoke the resolved command with
-    # the call operator; this works for .cmd, .ps1, and .exe installations.
     $childPowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
     $quotedOpenCode = Quote-PowerShellLiteral $OpenCodePath
     $quotedPrompt = Quote-PowerShellLiteral $Prompt
     $quotedModel = Quote-PowerShellLiteral $modelRef
     $command = "& $quotedOpenCode run $quotedPrompt --model $quotedModel"
-
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -84,13 +168,14 @@ function Invoke-OpenCodeTest {
             $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
             Write-Host "TIMEOUT: $model / $Stage apos ${TimeoutSec}s" -ForegroundColor Yellow
             return [PSCustomObject]@{
-                Model    = $Model
-                Stage    = $Stage
-                Passed   = $false
-                ExitCode = $null
-                Seconds  = $elapsed
-                Output   = ""
-                Error    = "TIMEOUT apos ${TimeoutSec}s"
+                Model       = $Model
+                Stage       = $Stage
+                Passed      = $false
+                Unavailable = $false
+                ExitCode    = $null
+                Seconds     = $elapsed
+                Output      = ""
+                Error       = "TIMEOUT apos ${TimeoutSec}s"
             }
         }
 
@@ -102,56 +187,50 @@ function Invoke-OpenCodeTest {
         if ($stdout) { Write-Host $stdout }
         if ($stderr) { Write-Host $stderr -ForegroundColor DarkYellow }
 
+        $combined = "$stdout`n$stderr"
+        $unavailable = $combined -match "model_not_available|model isn't available|model is not available|not available right now"
         $passed = ($process.ExitCode -eq 0)
-        if (-not $passed -and -not $stdout -and -not $stderr) {
-            Write-Host "OpenCode encerrou com exit code $($process.ExitCode), sem stdout/stderr." -ForegroundColor Yellow
-        }
 
         return [PSCustomObject]@{
-            Model    = $Model
-            Stage    = $Stage
-            Passed   = $passed
-            ExitCode = $process.ExitCode
-            Seconds  = $elapsed
-            Output   = $stdout
-            Error    = $stderr
+            Model       = $Model
+            Stage       = $Stage
+            Passed      = $passed
+            Unavailable = $unavailable
+            ExitCode    = $process.ExitCode
+            Seconds     = $elapsed
+            Output      = $stdout
+            Error       = $stderr
         }
     }
     catch {
         $message = $_.Exception.Message
         Write-Host "ERRO AO INICIAR OPENCODE: $message" -ForegroundColor Red
         return [PSCustomObject]@{
-            Model    = $Model
-            Stage    = $Stage
-            Passed   = $false
-            ExitCode = $null
-            Seconds  = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
-            Output   = ""
-            Error    = $message
+            Model       = $Model
+            Stage       = $Stage
+            Passed      = $false
+            Unavailable = $false
+            ExitCode    = $null
+            Seconds     = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
+            Output      = ""
+            Error       = $message
         }
     }
+}
+
+function Format-TestState {
+    param($Result)
+
+    if (-not $Result) { return "-" }
+    if ($Result.Unavailable) { return "UNAVAILABLE" }
+    if ($Result.Passed) { return "PASS" }
+    return "FAIL"
 }
 
 Write-Host ""
 Write-Host "=== WebToAPI progressive model test ==="
 Write-Host "Gateway : $GatewayUrl"
 Write-Host "WorkDir : $WorkDir"
-Write-Host ""
-
-$openCodePath = Resolve-OpenCodeCommand
-Write-Host "OpenCode : $openCodePath"
-Write-Host ""
-
-# Fail fast before iterating over every model if OpenCode itself cannot be
-# launched in this environment.
-Write-Host "Validando launcher do OpenCode..."
-$probeCommand = "& $(Quote-PowerShellLiteral $openCodePath) --version"
-$probeEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probeCommand))
-$probeOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $probeEncoded 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "Falha ao iniciar OpenCode pelo launcher resolvido '$openCodePath': $($probeOutput -join ' ')"
-}
-Write-Host "OpenCode launcher OK: $($probeOutput -join ' ')"
 Write-Host ""
 
 $models = Get-GatewayModels
@@ -161,6 +240,18 @@ if (-not $models -or $models.Count -eq 0) {
 
 Write-Host "Modelos encontrados: $($models.Count)"
 foreach ($model in $models) { Write-Host "  - $model" }
+Write-Host ""
+
+$openCodePath = Resolve-OpenCodeCommand
+Write-Host "OpenCode : $openCodePath"
+Write-Host "Validando launcher do OpenCode..."
+$probeCommand = "& $(Quote-PowerShellLiteral $openCodePath) --version"
+$probeEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probeCommand))
+$probeOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $probeEncoded 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "Falha ao iniciar OpenCode pelo launcher resolvido '$openCodePath': $($probeOutput -join ' ')"
+}
+Write-Host "OpenCode launcher OK: $($probeOutput -join ' ')"
 
 $results = New-Object System.Collections.Generic.List[object]
 
@@ -170,10 +261,18 @@ foreach ($model in $models) {
     Write-Host "MODEL: $model"
     Write-Host "======================================================================"
 
-    $level1 = Invoke-OpenCodeTest -Model $model -Stage "LEVEL 1 - Basic chat" -Prompt "Responda somente OK" -OpenCodePath $openCodePath
+    # LEVEL 1 intentionally bypasses OpenCode. This prevents OpenCode retries
+    # from hammering an unavailable upstream model and verifies the gateway
+    # itself with exactly one basic request.
+    $level1 = Invoke-DirectChatTest -Model $model
     $results.Add($level1)
     if (-not $level1.Passed) {
-        Write-Host "FAIL: $model falhou no LEVEL 1. Pulando proximos niveis."
+        if ($level1.Unavailable) {
+            Write-Host "SKIP: $model nao esta disponivel upstream."
+        }
+        else {
+            Write-Host "FAIL: $model falhou no LEVEL 1. Pulando proximos niveis."
+        }
         continue
     }
 
@@ -204,9 +303,9 @@ $summary = foreach ($model in $models) {
 
     [PSCustomObject]@{
         Model   = $model
-        Chat    = if ($l1) { if ($l1.Passed) { "PASS" } else { "FAIL" } } else { "-" }
-        Read    = if ($l2) { if ($l2.Passed) { "PASS" } else { "FAIL" } } else { "-" }
-        Agentic = if ($l3) { if ($l3.Passed) { "PASS" } else { "FAIL" } } else { "-" }
+        Chat    = Format-TestState $l1
+        Read    = Format-TestState $l2
+        Agentic = Format-TestState $l3
     }
 }
 
