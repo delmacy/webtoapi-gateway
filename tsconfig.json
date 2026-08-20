@@ -7,6 +7,11 @@
 		"moduleDetection": "force",
 		"jsx": "react-jsx",
 		"allowJs": true,
+		// Only load ambient types required by this Bun gateway. Without an explicit
+		// list, TypeScript auto-includes every visible @types package from the local
+		// environment, which can make typecheck fail because of unrelated/stale
+		// packages such as react, jsonwebtoken, bcryptjs, or ms.
+		"types": ["bun"],
 		// Bundler mode
 		"moduleResolution": "bundler",
 		"allowImportingTsExtensions": true,
