@@ -163,12 +163,7 @@ export class AgentRuntime {
 		this.cleanupExpired();
 		const sessionId = deriveSessionId(body);
 		const now = Date.now();
-		const reconciliation = this.eventStore.reconcile(
-			sessionId,
-			body.messages,
-			body.tools,
-			now,
-		);
+		const reconciliation = this.eventStore.reconcile(sessionId, body.messages, body.tools, now);
 		const rawChars = estimateChars(body);
 		const fingerprints = toolCallFingerprints(body.messages);
 		const toolTurns = body.messages.filter(
