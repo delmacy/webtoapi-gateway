@@ -2,30 +2,25 @@ import type { Page } from "playwright-core";
 import { BrowserManager } from "../../browser/manager.ts";
 import { BaseApiClient } from "../factory/base-api-client.ts";
 import type { ApiClientConfig, NormalizedSendParams } from "../factory/types.ts";
-import { type BrowserCookie, parseCookieHeader } from "../shared/cookie-parser.ts";
+import type { BrowserCookie } from "../shared/cookie-parser.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import type { StreamResult } from "../types.ts";
 import type { KimiWebAuth } from "./auth.ts";
 import { parseKimiStream } from "./stream.ts";
 
-function normalizeSiteUrl(siteUrl?: string): string {
-	try {
-		const url = new URL(siteUrl || "https://www.kimi.com/");
-		if (url.hostname.endsWith("kimi.ai") || url.hostname.endsWith("kimi.com")) {
-			return url.origin;
-		}
-	} catch {
-		/* fall through */
-	}
-	return "https://www.kimi.com";
-}
+/**
+ * Kimi's international web chat backend lives on www.kimi.com even when the
+ * authentication flow starts on kimi.ai. The captured access token is the
+ * portable credential; browser cookies remain scoped to their original site.
+ */
+const KIMI_CHAT_BASE_URL = "https://www.kimi.com";
 
 export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 	readonly providerId = "kimi-web";
 
 	protected readonly config: ApiClientConfig = {
-		hostKey: "kimi",
-		startUrl: "https://www.kimi.com/",
+		hostKey: "kimi.com",
+		startUrl: `${KIMI_CHAT_BASE_URL}/`,
 		cookieDomain: ".kimi.com",
 		defaultModel: "moonshot-v1-32k",
 		models: [
@@ -35,56 +30,38 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		],
 	};
 
-	private readonly baseUrl: string;
-	private readonly cookieDomain: string;
-
-	constructor(auth: KimiWebAuth) {
-		super(auth);
-		this.baseUrl = normalizeSiteUrl(auth.siteUrl);
-		this.cookieDomain = new URL(this.baseUrl).hostname.endsWith("kimi.ai") ? ".kimi.ai" : ".kimi.com";
-	}
+	private readonly baseUrl = KIMI_CHAT_BASE_URL;
 
 	protected getCookies(): BrowserCookie[] {
+		// Authentication may originate on kimi.ai, whose cookies cannot be replayed
+		// on kimi.com. Runtime auth is therefore driven by the captured access token.
 		return [];
 	}
 
-	/** Reuse the authenticated Kimi variant and keep cookies scoped to that site. */
 	protected override async getPage(): Promise<Page> {
 		if (this.page) {
 			try {
 				await this.page.evaluate(() => document.readyState);
-				return this.page;
+				if (this.page.url().includes("kimi.com")) return this.page;
 			} catch {
-				this.page = null;
+				/* recreate below */
 			}
+			this.page = null;
 		}
 
 		const bm = BrowserManager.getInstance();
-		const hostKey = new URL(this.baseUrl).hostname;
-		this.page = await bm.getPage(hostKey, `${this.baseUrl}/`);
-
-		const cookie = this.auth.cookie || "";
-		if (cookie.trim()) {
-			const cookies = parseCookieHeader(cookie, this.cookieDomain).map((c) => ({
-				...c,
-				...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-") ? { secure: true } : {}),
-			}));
-			if (cookies.length > 0) await bm.addCookies(cookies);
-		}
+		this.page = await bm.getPage("kimi.com", `${this.baseUrl}/`);
 		return this.page;
 	}
 
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
-		const bm = BrowserManager.getInstance();
-		const ctx = await bm.getContext();
-		const cookies = await ctx.cookies([this.baseUrl]);
-		const kimiAuthCookie = cookies.find((c) => c.name === "kimi-auth" || c.name === "access_token")?.value;
-		const authToken = this.auth.accessToken || kimiAuthCookie;
+		const authToken = this.auth.accessToken;
 		if (!authToken) {
 			return {
 				ok: false,
 				status: 401,
-				error: `Kimi: no credentials for ${this.baseUrl}. Run webauth to refresh login.`,
+				error:
+					"Kimi: no captured access token. Re-run webauth while logged in to kimi.ai or kimi.com.",
 			};
 		}
 
@@ -144,13 +121,17 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 				const arr = await res.arrayBuffer();
 				const u8 = new Uint8Array(arr);
 				const texts: string[] = [];
+				const framePreviews: string[] = [];
 				let o = 0;
 				while (o + 5 <= u8.length) {
+					const flags = u8[o] ?? 0;
 					const len = new DataView(u8.buffer, u8.byteOffset + o + 1, 4).getUint32(0, false);
 					if (o + 5 + len > u8.length) break;
 					const chunk = u8.slice(o + 5, o + 5 + len);
+					const decoded = new TextDecoder().decode(chunk);
+					if (framePreviews.length < 4) framePreviews.push(`flags=${flags} ${decoded.slice(0, 240)}`);
 					try {
-						const obj = JSON.parse(new TextDecoder().decode(chunk));
+						const obj = JSON.parse(decoded);
 						if (obj.error) {
 							return {
 								ok: false as const,
@@ -159,7 +140,12 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 							};
 						}
 						const op = obj.op || "";
-						if (obj.block?.text?.content && (op === "append" || op === "set")) {
+						const mask = obj.mask || "";
+						if (
+							obj.block?.text?.content &&
+							(op === "append" || op === "set") &&
+							(!mask || mask === "block.text.content")
+						) {
 							texts.push(obj.block.text.content);
 						} else if (obj.text?.content && (op === "append" || op === "set")) {
 							texts.push(obj.text.content);
@@ -171,7 +157,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 						}
 						if (obj.done) break;
 					} catch {
-						/* ignore non-JSON control frames */
+						/* trailer/control frames can be non-JSON */
 					}
 					o += 5 + len;
 				}
@@ -180,7 +166,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					return {
 						ok: false as const,
 						status: 502,
-						error: `Kimi returned ${u8.length} bytes but no assistant text was decoded`,
+						error: `Kimi returned ${u8.length} bytes but no assistant text was decoded. Frames: ${framePreviews.join(" | ")}`,
 					};
 				}
 				return { ok: true as const, text: texts.join("") };
