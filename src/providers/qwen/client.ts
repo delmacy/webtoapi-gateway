@@ -46,7 +46,6 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						body: JSON.stringify({}),
 						signal: controller.signal,
 					});
-					clearTimeout(timer);
 					if (!res.ok) {
 						const errorText = await res.text();
 						return { ok: false as const, status: res.status, error: errorText };
@@ -55,7 +54,6 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 					const chatId = data.data?.id ?? data.chat_id ?? data.id ?? data.chatId;
 					return { ok: true as const, chatId };
 				} catch (err) {
-					if (typeof timer !== "undefined") clearTimeout(timer);
 					const msg = String(err);
 					if (msg.includes("aborted") || msg.includes("signal")) {
 						return {
@@ -65,6 +63,8 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						};
 					}
 					return { ok: false as const, status: 500, error: msg };
+				} finally {
+					if (typeof timer !== "undefined") clearTimeout(timer);
 				}
 			},
 			{ baseUrl: this.baseUrl, timeoutMs: createChatTimeoutMs },
@@ -118,7 +118,6 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						body: JSON.stringify(requestBody),
 						signal: controller.signal,
 					});
-					clearTimeout(timer);
 					if (!res.ok) {
 						const errorText = await res.text();
 						return { ok: false as const, status: res.status, error: errorText };
@@ -131,10 +130,14 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						const { done, value } = await reader.read();
 						if (done) break;
 						fullText += decoder.decode(value, { stream: true });
+						if (fullText.includes("data: [DONE]")) {
+							await reader.cancel();
+							break;
+						}
 					}
+					fullText += decoder.decode();
 					return { ok: true as const, data: fullText };
 				} catch (err) {
-					if (typeof timer !== "undefined") clearTimeout(timer);
 					const msg = String(err);
 					if (msg.includes("aborted") || msg.includes("signal")) {
 						return {
@@ -144,6 +147,8 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						};
 					}
 					return { ok: false as const, status: 500, error: msg };
+				} finally {
+					if (typeof timer !== "undefined") clearTimeout(timer);
 				}
 			},
 			{
