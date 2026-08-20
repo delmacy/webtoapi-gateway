@@ -194,7 +194,9 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				this.parentMessageId = null;
 			}
 		} else {
-			console.log(`[QwenWeb] stage=reuse-chat chatId=${chatId} parentId=${parentMessageId ?? "null"}`);
+			console.log(
+				`[QwenWeb] stage=reuse-chat chatId=${chatId} parentId=${parentMessageId ?? "null"}`,
+			);
 		}
 
 		const runtime = this.getRuntimeTarget(chatId);
