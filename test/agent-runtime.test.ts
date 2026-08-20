@@ -25,7 +25,8 @@ describe("AgentRuntime", () => {
 				{ role: "tool", tool_call_id: "recent", content: "y".repeat(2000) },
 			],
 		};
-		const result = runtime().optimize(body);
+		const r = runtime();
+		const result = r.optimize(body);
 		const oldTool = result.body.messages[1];
 		const recentTool = result.body.messages[3];
 		expect(oldTool?.role).toBe("tool");
@@ -33,9 +34,14 @@ describe("AgentRuntime", () => {
 		expect(oldTool?.role === "tool" ? oldTool.content : "").toContain("context compaction");
 		expect(recentTool?.role === "tool" ? recentTool.content.length : 0).toBe(2000);
 		expect(result.snapshot.savedPromptChars).toBeGreaterThan(0);
+
+		const canonicalOldTool = r
+			.getHistorySnapshot(result.sessionId)
+			?.events.find((event) => event.kind === "tool_result" && event.payload.callId === "old");
+		expect(String(canonicalOldTool?.payload.content ?? "").length).toBe(2000);
 	});
 
-	test("derives a stable session id for repeated task context", () => {
+	test("derives a stable session id and append delta for repeated task context", () => {
 		const base: ChatCompletionRequest = {
 			model: "kimi-test",
 			messages: [{ role: "user", content: "TASK-123 implement feature" }],
@@ -47,7 +53,52 @@ describe("AgentRuntime", () => {
 			messages: [...base.messages, { role: "assistant", content: "ok" }],
 		});
 		expect(a.sessionId).toBe(b.sessionId);
+		expect(a.reconciliation.relation).toBe("initial");
+		expect(b.reconciliation.relation).toBe("append");
+		expect(b.reconciliation.deltaEvents).toHaveLength(1);
 		expect(b.snapshot.requests).toBe(2);
+		expect(b.snapshot.historyEpoch).toBe(1);
+	});
+
+	test("detects exact retry without producing a semantic delta", () => {
+		const body: ChatCompletionRequest = {
+			model: "qwen-test",
+			messages: [
+				{ role: "user", content: "inspect" },
+				{ role: "assistant", content: "done" },
+			],
+		};
+		const r = runtime();
+		r.optimize(body);
+		const retry = r.optimize(body);
+		expect(retry.reconciliation.relation).toBe("exact");
+		expect(retry.reconciliation.action).toBe("noop");
+		expect(retry.snapshot.deltaEvents).toBe(0);
+		expect(retry.snapshot.requiresRehydrate).toBe(false);
+	});
+
+	test("increments history epoch when a session diverges", () => {
+		const r = runtime();
+		const initial: ChatCompletionRequest = {
+			model: "deepseek-test",
+			messages: [
+				{ role: "user", content: "task" },
+				{ role: "assistant", content: "path A" },
+			],
+		};
+		const a = r.optimize(initial);
+		const b = r.optimize({
+			...initial,
+			messages: [
+				{ role: "user", content: "task" },
+				{ role: "assistant", content: "path B" },
+			],
+		});
+		expect(a.snapshot.historyEpoch).toBe(1);
+		expect(b.reconciliation.relation).toBe("diverged");
+		expect(b.reconciliation.action).toBe("rehydrate");
+		expect(b.snapshot.historyEpoch).toBe(2);
+		expect(b.snapshot.requiresRehydrate).toBe(true);
 	});
 
 	test("stops runaway identical tool calls", () => {
