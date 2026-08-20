@@ -1,26 +1,63 @@
 /**
  * Dynamic tool prompt generation from OpenAI function definitions.
  *
- * Unlike openclaw's hardcoded WEB_CORE_TOOLS, this generates the prompt
- * from whatever tools the CLI sends in the request.
- *
- * Prompt strategy based on:
- * - arXiv:2407.04997 (example-based teaching for tool calling)
- * - OpenAI's own function calling documentation format
+ * The original project serialized complete JSON schemas on every tool turn.
+ * Agentic clients such as OpenCode resend those schemas repeatedly, so this
+ * module renders an equivalent compact signature while preserving the fields
+ * that matter most for correct calls: name, required parameters, types,
+ * enums, arrays, nested object shape, and a bounded description.
  */
 
 import type { ToolDefinition } from "../openai/types.ts";
 
-function toolDefsForPrompt(tools: ToolDefinition[]): string {
-	return JSON.stringify(
-		tools.map((t) => ({
-			name: t.function.name,
-			description: t.function.description || "",
-			parameters: t.function.parameters || {},
-		})),
-		null,
-		2,
+type JsonSchema = Record<string, unknown>;
+
+function bounded(text: string, max = 180): string {
+	const clean = text.replace(/\s+/g, " ").trim();
+	return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
+}
+
+function renderSchemaType(schema: JsonSchema, depth = 0): string {
+	if (depth > 2) return String(schema.type ?? "any");
+	if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+		return schema.enum.map((value) => JSON.stringify(value)).join("|");
+	}
+
+	const type = typeof schema.type === "string" ? schema.type : "any";
+	if (type === "array") {
+		const items = schema.items && typeof schema.items === "object" ? (schema.items as JsonSchema) : {};
+		return `array<${renderSchemaType(items, depth + 1)}>`;
+	}
+	if (type === "object") {
+		const properties =
+			schema.properties && typeof schema.properties === "object"
+				? (schema.properties as Record<string, JsonSchema>)
+				: {};
+		const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
+		const fields = Object.entries(properties).map(
+			([name, child]) => `${name}${required.has(name) ? "!" : "?"}:${renderSchemaType(child, depth + 1)}`,
+		);
+		return fields.length > 0 ? `{${fields.join(",")}}` : "object";
+	}
+	return type;
+}
+
+function renderToolSignature(tool: ToolDefinition): string {
+	const schema = (tool.function.parameters ?? {}) as JsonSchema;
+	const properties =
+		schema.properties && typeof schema.properties === "object"
+			? (schema.properties as Record<string, JsonSchema>)
+			: {};
+	const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
+	const args = Object.entries(properties).map(
+		([name, child]) => `${name}${required.has(name) ? "!" : "?"}:${renderSchemaType(child)}`,
 	);
+	const description = tool.function.description ? ` — ${bounded(tool.function.description)}` : "";
+	return `"${tool.function.name}"(${args.join(", ")})${description}`;
+}
+
+export function toolDefsForPrompt(tools: ToolDefinition[]): string {
+	return tools.map(renderToolSignature).join("\n");
 }
 
 const TOOL_EXAMPLE = `Example: to add 1 to number 5, return ONLY:
@@ -46,7 +83,7 @@ export function buildToolPrompt(
 		const forceHint = forceUse
 			? "\n\n重要：你必须使用上述工具之一来回应。请不要直接用文字回答，必须调用工具。"
 			: "";
-		return `你可以使用以下工具。当需要使用工具时，只返回tool_json代码块，不要包含其他文字。
+		return `你可以使用以下工具。签名中 ! 表示必填参数，? 表示可选参数。当需要使用工具时，只返回tool_json代码块，不要包含其他文字。
 
 可用工具:
 ${defs}
@@ -61,7 +98,7 @@ ${TOOL_EXAMPLE_CN}
 	const forceHint = forceUse
 		? "\n\nIMPORTANT: You MUST use one of the tools above. Do NOT answer with plain text."
 		: "";
-	return `You have access to the following tools. When you need to use a tool, reply ONLY with a tool_json code block, no other text.
+	return `You have access to the following tools. In signatures, ! means required and ? means optional. When you need a tool, reply ONLY with a tool_json code block, no other text.
 
 Available tools:
 ${defs}
