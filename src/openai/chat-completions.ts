@@ -1,3 +1,5 @@
+import { type FairUsePolicy, fairUseGovernor } from "../agent/governor.ts";
+import { type AgentMode, type AgentRuntimeConfig, agentRuntime } from "../agent/runtime.ts";
 import { evictProviderClient } from "../providers/registry.ts";
 import type { WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
@@ -11,9 +13,23 @@ import type {
 } from "./types.ts";
 
 let _routeTimeoutMs = 300_000;
+let _fairUsePolicy: FairUsePolicy = { maxConcurrency: 1, minIntervalMs: 2500 };
+let _agentMode: AgentMode = "optimized";
 
 export function setRouteTimeoutSec(sec: number): void {
 	_routeTimeoutMs = sec * 1000;
+}
+
+export function configureAgentLayer(
+	runtimeConfig: AgentRuntimeConfig,
+	fairUsePolicy: FairUsePolicy,
+): void {
+	agentRuntime.configure(runtimeConfig);
+	_agentMode = runtimeConfig.mode;
+	_fairUsePolicy = {
+		maxConcurrency: Math.max(1, Math.floor(fairUsePolicy.maxConcurrency)),
+		minIntervalMs: Math.max(0, Math.floor(fairUsePolicy.minIntervalMs)),
+	};
 }
 
 function generateId(): string {
@@ -25,28 +41,43 @@ function estimateTokens(text: string): number {
 }
 
 export async function handleChatCompletions(
-	body: ChatCompletionRequest,
+	inputBody: ChatCompletionRequest,
 	client: WebProviderClient,
 ): Promise<Response> {
-	if (!body.messages || body.messages.length === 0) {
+	if (!inputBody.messages || inputBody.messages.length === 0) {
 		return jsonError("messages is required and must not be empty", 400);
 	}
-
-	if (!body.model) {
+	if (!inputBody.model) {
 		return jsonError("model is required", 400);
 	}
 
-	const id = generateId();
-	const model = body.model;
-	const { prompt, hasTools } = buildPromptFromMessages(body.messages, body.tools, body.tool_choice);
-
-	if (!prompt) {
-		return jsonError("Could not construct prompt from messages", 400);
+	const optimized = agentRuntime.optimize(inputBody);
+	if (optimized.rejection) {
+		return withAgentHeaders(
+			jsonError(optimized.rejection.message, optimized.rejection.status),
+			optimized.sessionId,
+			optimized.snapshot.savedPromptChars,
+		);
 	}
 
+	const body = optimized.body;
+	const id = generateId();
+	const model = body.model;
+	const { prompt, hasTools } = buildPromptFromMessages(
+		body.messages,
+		body.tools,
+		body.tool_choice,
+		_agentMode === "optimized",
+	);
+	if (!prompt) return jsonError("Could not construct prompt from messages", 400);
+
+	const release =
+		_agentMode === "optimized"
+			? await fairUseGovernor.acquire(client.providerId, _fairUsePolicy)
+			: () => {};
 	const handler = body.stream
-		? handleStreaming(id, model, prompt, hasTools, body, client)
-		: handleNonStreaming(id, model, prompt, hasTools, body, client);
+		? handleStreaming(id, model, prompt, hasTools, body, client, optimized.sessionId, release)
+		: handleNonStreaming(id, model, prompt, hasTools, body, client, optimized.sessionId, release);
 
 	const timeout = new Promise<Response>((resolve) =>
 		setTimeout(() => {
@@ -55,7 +86,8 @@ export async function handleChatCompletions(
 		}, _routeTimeoutMs),
 	);
 
-	return Promise.race([handler, timeout]);
+	const response = await Promise.race([handler, timeout]);
+	return withAgentHeaders(response, optimized.sessionId, optimized.snapshot.savedPromptChars);
 }
 
 async function handleNonStreaming(
@@ -65,18 +97,17 @@ async function handleNonStreaming(
 	hasTools: boolean,
 	body: ChatCompletionRequest,
 	client: WebProviderClient,
+	sessionId: string,
+	release: () => void,
 ): Promise<Response> {
 	try {
-		const stream = await client.sendMessage({ message: prompt, model });
+		const stream = await client.sendMessage({ message: prompt, model, sessionId });
 		const result = await client.parseStream(stream);
-
 		const { content, toolCalls, finishReason } = hasTools
 			? parseToolResponse(result.text, body.tools)
 			: { content: result.text, toolCalls: undefined, finishReason: "stop" as const };
-
 		const promptTokens = estimateTokens(prompt);
 		const completionTokens = estimateTokens(result.text);
-
 		const response: ChatCompletionResponse = {
 			id,
 			object: "chat.completion",
@@ -86,11 +117,7 @@ async function handleNonStreaming(
 			choices: [
 				{
 					index: 0,
-					message: {
-						role: "assistant",
-						content,
-						...(toolCalls ? { tool_calls: toolCalls } : {}),
-					},
+					message: { role: "assistant", content, ...(toolCalls ? { tool_calls: toolCalls } : {}) },
 					finish_reason: finishReason,
 				},
 			],
@@ -100,14 +127,13 @@ async function handleNonStreaming(
 				total_tokens: promptTokens + completionTokens,
 			},
 		};
-
 		return Response.json(response);
 	} catch (err) {
 		return providerErrorResponse(err, "non-streaming");
+	} finally {
+		release();
 	}
 }
-
-// ---- Streaming helpers ----
 
 type SseWriter = {
 	writeChunk(id: string, model: string, choices: Parameters<typeof makeChunk>[2]): void;
@@ -146,10 +172,7 @@ function emitToolCallDeltas(w: SseWriter, id: string, model: string, toolCalls: 
 			function: { name: tc.function.name, arguments: "" },
 		};
 		w.writeChunk(id, model, [{ index: 0, delta: { tool_calls: [tcStart] }, finish_reason: null }]);
-		const tcArgs: ToolCallDelta = {
-			index: i,
-			function: { arguments: tc.function.arguments },
-		};
+		const tcArgs: ToolCallDelta = { index: i, function: { arguments: tc.function.arguments } };
 		w.writeChunk(id, model, [{ index: 0, delta: { tool_calls: [tcArgs] }, finish_reason: null }]);
 	}
 }
@@ -161,15 +184,14 @@ async function handleStreaming(
 	hasTools: boolean,
 	body: ChatCompletionRequest,
 	client: WebProviderClient,
+	sessionId: string,
+	release: () => void,
 ): Promise<Response> {
-	// Await sendMessage BEFORE creating the SSE stream so that pre-stream
-	// errors (auth, rate-limit, model-not-available) return a proper HTTP
-	// error status instead of being buried inside an SSE event that the
-	// client cannot parse as a ChatCompletionChunk.
 	let providerStream: ReadableStream<Uint8Array>;
 	try {
-		providerStream = await client.sendMessage({ message: prompt, model });
+		providerStream = await client.sendMessage({ message: prompt, model, sessionId });
 	} catch (err) {
+		release();
 		return providerErrorResponse(err, "streaming (pre-stream)");
 	}
 
@@ -178,24 +200,20 @@ async function handleStreaming(
 			const w = createSseWriter(controller);
 			try {
 				w.writeChunk(id, model, [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]);
-
-				if (!hasTools) {
-					await streamWithoutTools(w, id, model, providerStream, client);
-				} else {
-					await streamWithTools(w, id, model, providerStream, body, client);
-				}
-
+				if (!hasTools) await streamWithoutTools(w, id, model, providerStream, client);
+				else await streamWithTools(w, id, model, providerStream, body, client);
 				w.done();
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				console.error(`[chat-completions] Stream error (mid-stream): ${message}`);
 				w.error(message);
 				w.done();
+			} finally {
+				release();
+				w.close();
 			}
-			w.close();
 		},
 	});
-
 	return new Response(readable, { headers: sseHeaders() });
 }
 
@@ -222,28 +240,30 @@ async function streamWithTools(
 ) {
 	const result = await client.parseStream(providerStream);
 	const { content, toolCalls, finishReason } = parseToolResponse(result.text, body.tools);
-
 	if (finishReason === "tool_calls" && toolCalls) {
 		emitToolCallDeltas(w, id, model, toolCalls);
 		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
 	} else {
-		if (content) {
-			w.writeChunk(id, model, [{ index: 0, delta: { content }, finish_reason: null }]);
-		}
+		if (content) w.writeChunk(id, model, [{ index: 0, delta: { content }, finish_reason: null }]);
 		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 	}
+}
+
+function withAgentHeaders(response: Response, sessionId: string, savedChars: number): Response {
+	const headers = new Headers(response.headers);
+	headers.set("x-webtoapi-session-id", sessionId);
+	headers.set("x-webtoapi-saved-context-chars", String(savedChars));
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
 }
 
 function jsonError(message: string, status: number): Response {
 	return Response.json({ error: { message, type: "invalid_request_error" } }, { status });
 }
 
-/**
- * Map a caught provider error to an HTTP Response.
- * - SessionExpiredError → 401, evict cached client
- * - ProviderApiError    → mirror the provider's 4xx (don't wrap in 502)
- * - anything else       → 502
- */
 function providerErrorResponse(err: unknown, context: string): Response {
 	if (err instanceof SessionExpiredError) {
 		evictProviderClient(err.providerId);
@@ -253,9 +273,10 @@ function providerErrorResponse(err: unknown, context: string): Response {
 		return jsonError(err.message, 401);
 	}
 	if (err instanceof ProviderApiError) {
-		const message = err.message;
-		console.error(`[chat-completions] ${context}: provider error ${err.httpStatus}: ${message}`);
-		return jsonError(message, err.httpStatus);
+		console.error(
+			`[chat-completions] ${context}: provider error ${err.httpStatus}: ${err.message}`,
+		);
+		return jsonError(err.message, err.httpStatus);
 	}
 	const message = err instanceof Error ? err.message : String(err);
 	console.error(`[chat-completions] ${context}: ${message}`);

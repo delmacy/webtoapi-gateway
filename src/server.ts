@@ -1,7 +1,12 @@
+import { agentRuntime } from "./agent/runtime.ts";
 import { authenticate } from "./auth.ts";
 import { BrowserManager } from "./browser/manager.ts";
 import { loadConfig } from "./config.ts";
-import { handleChatCompletions, setRouteTimeoutSec } from "./openai/chat-completions.ts";
+import {
+	configureAgentLayer,
+	handleChatCompletions,
+	setRouteTimeoutSec,
+} from "./openai/chat-completions.ts";
 import { listAuthorizedProviders } from "./providers/auth-store.ts";
 import {
 	checkAllSessions,
@@ -9,9 +14,25 @@ import {
 	listAllModels,
 	resolveModelToProvider,
 } from "./providers/registry.ts";
+import { runtimeProfiles } from "./providers/runtime-profile.ts";
 
 const config = loadConfig();
 setRouteTimeoutSec(config.requestTimeoutSec);
+configureAgentLayer(
+	{
+		mode: config.agentMode,
+		sessionIdleTtlSec: config.agentSessionIdleTtlSec,
+		maxToolTurns: config.agentMaxToolTurns,
+		maxIdenticalToolCalls: config.agentMaxIdenticalToolCalls,
+		toolResultMaxChars: config.agentToolResultMaxChars,
+		preserveTailMessages: config.agentPreserveTailMessages,
+		telemetry: config.agentTelemetry,
+	},
+	{
+		maxConcurrency: config.agentMaxConcurrencyPerProvider,
+		minIntervalMs: config.agentMinIntervalMs,
+	},
+);
 
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
@@ -38,7 +59,6 @@ async function handleRequest(req: Request): Promise<Response> {
 		return new Response(null, { status: 204, headers: CORS_HEADERS });
 	}
 
-	// Health check is public — no auth required (load balancers, monitoring)
 	if (pathname === "/health" || pathname === "/healthz") {
 		return withCors(await handleHealthRoute());
 	}
@@ -72,20 +92,27 @@ async function handleRequest(req: Request): Promise<Response> {
 	);
 }
 
-// ── Route handlers ───────────────────────────────────────────
-
 async function handleHealthRoute(): Promise<Response> {
 	const authorized = listAuthorizedProviders();
 	const browserHealthy = await BrowserManager.getInstance().isHealthy();
 	const sessions = await checkAllSessions();
 	const hasExpired = Object.values(sessions).some((s) => !s.valid && s.reason !== "unchecked");
 	const overallStatus = !browserHealthy ? "degraded" : hasExpired ? "session_expired" : "ok";
+	const agentSessions = agentRuntime.listSnapshots();
 	return Response.json({
 		status: overallStatus,
 		browser: browserHealthy ? "connected" : "disconnected",
 		providers: authorized.length,
 		models: (await listAllModels()).length,
 		sessions,
+		runtimeDiscovery: runtimeProfiles.all(),
+		agent: {
+			mode: config.agentMode,
+			activeSessions: agentSessions.length,
+			maxConcurrencyPerProvider: config.agentMaxConcurrencyPerProvider,
+			minIntervalMs: config.agentMinIntervalMs,
+			maxToolTurns: config.agentMaxToolTurns,
+		},
 	});
 }
 
@@ -147,13 +174,9 @@ async function handleModelByIdRoute(modelId: string): Promise<Response> {
 	});
 }
 
-// ── Server bootstrap ─────────────────────────────────────────
-
 const server = Bun.serve({
 	port: config.port,
 	fetch: handleRequest,
-	// Disable Bun's built-in idle timeout (default 10s).
-	// Route-level timeouts are managed by handleChatCompletions via Promise.race.
 	idleTimeout: 0,
 });
 
@@ -162,8 +185,23 @@ console.log(`Token-Free Gateway listening on http://localhost:${server.port}`);
 console.log(`Auth: ${config.gatewayApiKey ? "enabled (Bearer token)" : "disabled"}`);
 console.log(`Request timeout: ${config.requestTimeoutSec}s`);
 console.log(
+	`Agent mode: ${config.agentMode}; provider concurrency=${config.agentMaxConcurrencyPerProvider}; min interval=${config.agentMinIntervalMs}ms`,
+);
+console.log(
 	`Authorized providers: ${authorized.length > 0 ? authorized.join(", ") : "none — run 'token-free-gateway webauth' to authorize"}`,
 );
+
+// Eagerly connect to the authenticated Chrome session so provider network
+// observers are installed before the user sends manual messages in the tabs.
+// Previously BrowserManager was lazy and /health only performed a lightweight
+// CDP probe, so runtime discovery never started until a provider API call.
+try {
+	await BrowserManager.getInstance().getContext();
+} catch (err) {
+	console.warn(
+		`[BrowserManager] Runtime discovery startup failed: ${err instanceof Error ? err.message : String(err)}`,
+	);
+}
 
 async function gracefulShutdown(signal: string) {
 	console.log(`\nReceived ${signal}, shutting down...`);

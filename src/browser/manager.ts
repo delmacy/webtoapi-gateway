@@ -6,6 +6,7 @@
 
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { chromium } from "playwright-core";
+import { watchProviderNavigation } from "../providers/discovery.ts";
 import { getChromeWebSocketUrl, getDefaultCdpUrl, getHeadersWithAuth } from "./cdp-helpers.ts";
 
 export interface BrowserCookie {
@@ -31,48 +32,35 @@ class BrowserManager {
 		return BrowserManager.instance;
 	}
 
-	/**
-	 * Get the shared BrowserContext, connecting if needed.
-	 * Concurrent callers share the same in-flight connection promise.
-	 */
 	async getContext(): Promise<BrowserContext> {
-		if (this.context && !this.disconnected) {
-			return this.context;
-		}
-
-		if (this.connecting) {
-			return this.connecting;
-		}
+		if (this.context && !this.disconnected) return this.context;
+		if (this.connecting) return this.connecting;
 
 		this.connecting = this.connect();
 		try {
-			const ctx = await this.connecting;
-			return ctx;
+			return await this.connecting;
 		} finally {
 			this.connecting = null;
 		}
 	}
 
-	/**
-	 * Get or create a page for the given domain.
-	 * Reuses an existing tab whose URL contains the domain string.
-	 */
 	async getPage(domain: string, fallbackUrl?: string): Promise<Page> {
 		const ctx = await this.getContext();
 		const pages = ctx.pages();
 		const existing = pages.find((p) => p.url().includes(domain));
-		if (existing) return existing;
+		if (existing) {
+			watchProviderNavigation(existing);
+			return existing;
+		}
 
 		const page = await ctx.newPage();
+		watchProviderNavigation(page);
 		if (fallbackUrl) {
 			await page.goto(fallbackUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
 		}
 		return page;
 	}
 
-	/**
-	 * Inject cookies into the shared browser context.
-	 */
 	async addCookies(cookies: BrowserCookie[]): Promise<void> {
 		const ctx = await this.getContext();
 		if (cookies.length > 0) {
@@ -86,29 +74,21 @@ class BrowserManager {
 		}
 	}
 
-	/**
-	 * Check whether Chrome is reachable and the CDP connection is alive.
-	 */
 	async isHealthy(): Promise<boolean> {
 		if (this.disconnected || !this.browser || !this.context) {
-			// Try a lightweight CDP probe even without an active connection
 			const cdpUrl = getDefaultCdpUrl();
 			const ws = await getChromeWebSocketUrl(cdpUrl, 3000);
 			return ws !== null;
 		}
 
 		try {
-			// Verify the context is still responsive
 			const pages = this.context.pages();
-			return pages.length >= 0; // will throw if disconnected
+			return pages.length >= 0;
 		} catch {
 			return false;
 		}
 	}
 
-	/**
-	 * Graceful shutdown: disconnect from Chrome without killing it.
-	 */
 	async shutdown(): Promise<void> {
 		if (this.browser) {
 			try {
@@ -124,8 +104,6 @@ class BrowserManager {
 		this.connecting = null;
 	}
 
-	// ── internal ──────────────────────────────────────────────────────
-
 	private async connect(): Promise<BrowserContext> {
 		const cdpUrl = getDefaultCdpUrl();
 		console.log(`[BrowserManager] Connecting to Chrome at ${cdpUrl}...`);
@@ -134,12 +112,7 @@ class BrowserManager {
 		for (let attempt = 0; attempt < 15; attempt++) {
 			wsUrl = await getChromeWebSocketUrl(cdpUrl, 2000);
 			if (wsUrl) break;
-
-			// On first failure, try to auto-start Chrome
-			if (attempt === 2) {
-				await this.tryAutoStartChrome();
-			}
-
+			if (attempt === 2) await this.tryAutoStartChrome();
 			await new Promise((r) => setTimeout(r, 1000));
 		}
 
@@ -155,9 +128,7 @@ class BrowserManager {
 		});
 
 		const ctx = browser.contexts()[0];
-		if (!ctx) {
-			throw new Error("[BrowserManager] CDP connection returned no browser context");
-		}
+		if (!ctx) throw new Error("[BrowserManager] CDP connection returned no browser context");
 
 		this.browser = browser;
 		this.context = ctx;
@@ -170,10 +141,14 @@ class BrowserManager {
 			this.disconnected = true;
 		});
 
+		for (const page of ctx.pages()) watchProviderNavigation(page);
+		ctx.on("page", (page) => watchProviderNavigation(page));
+
 		const pageCount = ctx.pages().length;
 		console.log(
 			`[BrowserManager] Connected successfully (${pageCount} existing tab${pageCount !== 1 ? "s" : ""})`,
 		);
+		console.log("[BrowserManager] Provider runtime discovery enabled for Claude, Qwen, and Kimi");
 
 		return ctx;
 	}

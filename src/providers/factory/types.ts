@@ -28,4 +28,6 @@ export interface NormalizedSendParams {
 	message: string;
 	model: string;
 	signal?: AbortSignal;
+	/** Stable logical task/session id for optional upstream conversation affinity. */
+	sessionId?: string;
 }

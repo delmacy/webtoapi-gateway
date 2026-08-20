@@ -1,10 +1,10 @@
 /**
- * Converts between OpenAI tool protocol and Claude Web text-based tool calling.
+ * Converts between OpenAI tool protocol and text-based tool calling.
  *
  * Flow:
  * 1. buildPromptFromMessages: Converts OpenAI tools + messages into a single prompt
- * 2. parseToolResponse: Parses Claude's text response into OpenAI tool_calls format
- * 3. applyToolChoice: Enforces tool_choice semantics on both prompt and response
+ * 2. parseToolResponse: Parses the model text response into OpenAI tool_calls format
+ * 3. tool_choice handling is preserved before prompt generation
  */
 
 import type {
@@ -118,13 +118,12 @@ export function resolveEffectiveTools(
 	return { tools, forceUse: false };
 }
 
-/**
- * Build a single prompt string from OpenAI messages + tools for Claude Web.
- */
+/** Build a single prompt string from OpenAI messages + tools. */
 export function buildPromptFromMessages(
 	messages: ChatMessage[],
 	tools?: ToolDefinition[],
 	toolChoice?: ToolChoice,
+	compactTools = true,
 ): ConvertedPrompt {
 	const effective = resolveEffectiveTools(tools, toolChoice);
 	const hasTools = effective.tools.length > 0;
@@ -132,7 +131,7 @@ export function buildPromptFromMessages(
 	const lang = detectLang(messages);
 
 	if (hasTools) {
-		parts.push(buildToolPrompt(effective.tools, lang, effective.forceUse));
+		parts.push(buildToolPrompt(effective.tools, lang, effective.forceUse, compactTools));
 	}
 
 	for (const msg of messages) {
@@ -155,11 +154,8 @@ export function buildPromptFromMessages(
 }
 
 /**
- * Parse Claude's text response and detect tool calls.
- * Returns either tool_calls or plain text content.
- *
- * When tool_calls are detected, content is set to null per OpenAI standard
- * (GPT-4 returns content: null when making tool calls).
+ * Parse text response and detect tool calls.
+ * When tool_calls are detected, content is null per OpenAI convention.
  */
 export function parseToolResponse(
 	text: string,
@@ -190,6 +186,5 @@ export function parseToolResponse(
 		},
 	}));
 
-	// Per OpenAI standard: content is null when assistant produces tool_calls
 	return { content: null, toolCalls, finishReason: "tool_calls" };
 }
