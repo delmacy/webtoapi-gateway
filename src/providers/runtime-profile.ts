@@ -9,6 +9,9 @@ export interface ProviderRuntimeProfile {
 	scenario?: string;
 	conversationId?: string;
 	capabilities?: string[];
+	requestMethod?: string;
+	clientVersion?: string;
+	requestKeys?: string[];
 	lastObservedAt: number;
 	source: "network" | "response" | "probe" | "fallback";
 }
