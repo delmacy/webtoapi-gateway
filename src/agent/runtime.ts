@@ -12,6 +12,7 @@ import {
 } from "../session/store.ts";
 
 export type AgentMode = "passthrough" | "optimized";
+export type AgentSessionIdSource = "override" | "body" | "user" | "auto";
 
 export interface AgentRuntimeConfig {
 	mode: AgentMode;
@@ -42,17 +43,27 @@ export interface AgentSessionSnapshot {
 	toolRegistryHash?: string;
 	toolRegistryChanged: boolean;
 	requiresRehydrate: boolean;
+	sessionIdSource: AgentSessionIdSource;
+	sessionStable: boolean;
 }
 
 export interface AgentOptimizationResult {
 	body: ChatCompletionRequest;
 	sessionId: string;
+	sessionIdSource: AgentSessionIdSource;
+	sessionStable: boolean;
 	snapshot: AgentSessionSnapshot;
 	reconciliation: SessionReconciliation;
 	rejection?: { status: number; message: string };
 }
 
 type SessionState = AgentSessionSnapshot;
+
+type SessionIdentity = {
+	id: string;
+	source: AgentSessionIdSource;
+	stable: boolean;
+};
 
 function textOfUserMessage(message: ChatMessage): string {
 	if (message.role !== "user") return "";
@@ -72,8 +83,19 @@ function stableHash(input: string): string {
 	return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function deriveSessionId(body: ChatCompletionRequest): string {
-	if (body.user?.trim()) return `user:${body.user.trim()}`;
+function deriveSessionIdentity(
+	body: ChatCompletionRequest,
+	sessionIdOverride?: string,
+): SessionIdentity {
+	const override = sessionIdOverride?.trim();
+	if (override) return { id: `explicit:${override}`, source: "override", stable: true };
+
+	const bodySessionId = body.webtoapi_session_id?.trim();
+	if (bodySessionId) return { id: `explicit:${bodySessionId}`, source: "body", stable: true };
+
+	const user = body.user?.trim();
+	if (user) return { id: `user:${user}`, source: "user", stable: true };
+
 	const firstUser = body.messages.find((message) => message.role === "user");
 	const firstSystem = body.messages.find(
 		(message) => message.role === "system" || message.role === "developer",
@@ -83,7 +105,7 @@ function deriveSessionId(body: ChatCompletionRequest): string {
 		firstSystem && "content" in firstSystem ? String(firstSystem.content).slice(0, 4000) : "",
 		firstUser ? textOfUserMessage(firstUser).slice(0, 4000) : "",
 	].join("\n---\n");
-	return `auto:${stableHash(seed)}`;
+	return { id: `auto:${stableHash(seed)}`, source: "auto", stable: false };
 }
 
 function estimateChars(body: ChatCompletionRequest): number {
@@ -159,9 +181,10 @@ export class AgentRuntime {
 		this.config = config;
 	}
 
-	optimize(body: ChatCompletionRequest): AgentOptimizationResult {
+	optimize(body: ChatCompletionRequest, sessionIdOverride?: string): AgentOptimizationResult {
 		this.cleanupExpired();
-		const sessionId = deriveSessionId(body);
+		const identity = deriveSessionIdentity(body, sessionIdOverride);
+		const sessionId = identity.id;
 		const now = Date.now();
 		const reconciliation = this.eventStore.reconcile(sessionId, body.messages, body.tools, now);
 		const rawChars = estimateChars(body);
@@ -203,6 +226,8 @@ export class AgentRuntime {
 			deltaEvents: 0,
 			toolRegistryChanged: false,
 			requiresRehydrate: false,
+			sessionIdSource: identity.source,
+			sessionStable: identity.stable,
 		};
 		snapshot.lastActivityAt = now;
 		snapshot.model = body.model;
@@ -220,14 +245,22 @@ export class AgentRuntime {
 		snapshot.toolRegistryHash = reconciliation.toolRegistry?.hash;
 		snapshot.toolRegistryChanged = reconciliation.toolRegistryChanged;
 		snapshot.requiresRehydrate = reconciliation.requiresRehydrate;
+		snapshot.sessionIdSource = identity.source;
+		snapshot.sessionStable = identity.stable;
 		this.sessions.set(sessionId, snapshot);
+
+		const base = {
+			body: optimizedBody,
+			sessionId,
+			sessionIdSource: identity.source,
+			sessionStable: identity.stable,
+			snapshot: { ...snapshot },
+			reconciliation,
+		};
 
 		if (this.config.mode === "optimized" && toolTurns > this.config.maxToolTurns) {
 			return {
-				body: optimizedBody,
-				sessionId,
-				snapshot: { ...snapshot },
-				reconciliation,
+				...base,
 				rejection: {
 					status: 409,
 					message: `Agent loop guard: session exceeded maxToolTurns=${this.config.maxToolTurns}.`,
@@ -238,10 +271,7 @@ export class AgentRuntime {
 		const repeated = maxConsecutiveIdentical(fingerprints);
 		if (this.config.mode === "optimized" && repeated > this.config.maxIdenticalToolCalls) {
 			return {
-				body: optimizedBody,
-				sessionId,
-				snapshot: { ...snapshot },
-				reconciliation,
+				...base,
 				rejection: {
 					status: 409,
 					message: `Agent loop guard: identical tool call repeated ${repeated} times.`,
@@ -252,16 +282,11 @@ export class AgentRuntime {
 		if (this.config.telemetry) {
 			const saved = Math.max(0, rawChars - optimizedChars);
 			console.log(
-				`[agent] session=${sessionId} model=${body.model} request=${snapshot.requests} toolTurns=${toolTurns} rawChars=${rawChars} optimizedChars=${optimizedChars} savedChars=${saved} history=${reconciliation.relation} prefixEvents=${reconciliation.commonPrefixEvents} deltaEvents=${reconciliation.deltaEvents.length} epoch=${reconciliation.epoch} rehydrate=${reconciliation.requiresRehydrate} toolsChanged=${reconciliation.toolRegistryChanged}`,
+				`[agent] session=${sessionId} source=${identity.source} stable=${identity.stable} model=${body.model} request=${snapshot.requests} toolTurns=${toolTurns} rawChars=${rawChars} optimizedChars=${optimizedChars} savedChars=${saved} history=${reconciliation.relation} prefixEvents=${reconciliation.commonPrefixEvents} deltaEvents=${reconciliation.deltaEvents.length} epoch=${reconciliation.epoch} rehydrate=${reconciliation.requiresRehydrate} toolsChanged=${reconciliation.toolRegistryChanged}`,
 			);
 		}
 
-		return {
-			body: optimizedBody,
-			sessionId,
-			snapshot: { ...snapshot },
-			reconciliation,
-		};
+		return base;
 	}
 
 	getSnapshot(sessionId: string): AgentSessionSnapshot | undefined {
