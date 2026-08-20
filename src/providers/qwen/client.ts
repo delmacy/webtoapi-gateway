@@ -14,6 +14,8 @@ const QWEN_FALLBACK_ORIGIN = "https://chat.qwen.ai";
 const QWEN_CREATE_TIMEOUT_MS = 30_000;
 const QWEN_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const QWEN_EVALUATE_TIMEOUT_MS = 60_000;
+const QWEN_HISTORY_POLL_ATTEMPTS = 12;
+const QWEN_HISTORY_POLL_INTERVAL_MS = 250;
 
 type QwenErrorResult = {
 	ok: false;
@@ -30,6 +32,7 @@ type QwenCreateSuccess = {
 type QwenCompletionSuccess = {
 	ok: true;
 	data: string;
+	assistantMessageId?: string;
 	meta?: { status: number; contentType: string; bytes: number; firstByte: boolean };
 };
 
@@ -65,6 +68,9 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		],
 	};
 
+	private chatId = "";
+	private parentMessageId: string | null = null;
+
 	protected getCookies() {
 		return parseCookieHeader(
 			this.auth.cookie || `qwen_session=${this.auth.sessionToken}`,
@@ -96,11 +102,11 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		};
 	}
 
-	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
-		const initialRuntime = this.getRuntimeTarget();
-		const createRequestId = crypto.randomUUID();
+	private async createChat(page: Page, model: string): Promise<QwenCreateResult> {
+		const runtime = this.getRuntimeTarget();
+		const requestId = crypto.randomUUID();
 		console.log(
-			`[QwenWeb] stage=create-chat:start model=${params.model} origin=${initialRuntime.origin} version=${initialRuntime.version}`,
+			`[QwenWeb] stage=create-chat:start model=${model} origin=${runtime.origin} version=${runtime.version}`,
 		);
 
 		const createEval = page.evaluate(
@@ -153,28 +159,43 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				}
 			},
 			{
-				baseUrl: initialRuntime.origin,
+				baseUrl: runtime.origin,
 				timeoutMs: QWEN_CREATE_TIMEOUT_MS,
-				model: params.model,
-				requestId: createRequestId,
-				version: initialRuntime.version,
+				model,
+				requestId,
+				version: runtime.version,
 			},
 		);
 
-		const createChatResult = (await Promise.race([
+		const result = (await Promise.race([
 			createEval,
 			timeoutResult("create-chat browser evaluation", QWEN_EVALUATE_TIMEOUT_MS),
 		])) as QwenCreateResult;
-
-		if (!createChatResult.ok) {
+		if (result.ok) console.log(`[QwenWeb] stage=create-chat:ok chatId=${result.chatId}`);
+		else
 			console.warn(
-				`[QwenWeb] stage=create-chat:error status=${createChatResult.status} error=${createChatResult.error}`,
+				`[QwenWeb] stage=create-chat:error status=${result.status} error=${result.error}`,
 			);
-			return createChatResult;
-		}
+		return result;
+	}
 
-		const chatId = createChatResult.chatId;
-		console.log(`[QwenWeb] stage=create-chat:ok chatId=${chatId}`);
+	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
+		const stateful = Boolean(params.sessionId?.trim());
+		let chatId = stateful ? this.chatId : "";
+		let parentMessageId = stateful ? this.parentMessageId : null;
+
+		if (!chatId) {
+			const created = await this.createChat(page, params.model);
+			if (!created.ok) return created;
+			chatId = created.chatId;
+			parentMessageId = null;
+			if (stateful) {
+				this.chatId = chatId;
+				this.parentMessageId = null;
+			}
+		} else {
+			console.log(`[QwenWeb] stage=reuse-chat chatId=${chatId} parentId=${parentMessageId ?? "null"}`);
+		}
 
 		const runtime = this.getRuntimeTarget(chatId);
 		const fid = crypto.randomUUID();
@@ -193,9 +214,13 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				message,
 				fid,
 				childId,
+				parentMessageId,
 				requestId,
 				idleTimeoutMs,
 				version,
+				historyPollAttempts,
+				historyPollIntervalMs,
+				trackParent,
 			}) => {
 				const requestBody = {
 					stream: true,
@@ -204,12 +229,12 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 					chat_id: chatId,
 					chat_mode: "normal",
 					model,
-					parent_id: null,
+					parent_id: parentMessageId,
 					messages: [
 						{
 							id: null,
 							fid,
-							parentId: null,
+							parentId: parentMessageId,
 							childrenIds: [childId],
 							role: "user",
 							content: message,
@@ -230,7 +255,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 							},
 							extra: { meta: { subChatType: "t2t" } },
 							sub_chat_type: "t2t",
-							parent_id: null,
+							parent_id: parentMessageId,
 						},
 					],
 					timestamp: Date.now(),
@@ -309,9 +334,52 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 						};
 					}
 
+					let assistantMessageId: string | undefined;
+					if (trackParent) {
+						for (let attempt = 0; attempt < historyPollAttempts; attempt++) {
+							if (attempt > 0) {
+								await new Promise((resolve) => setTimeout(resolve, historyPollIntervalMs));
+							}
+							const historyRes = await fetch(`${baseUrl}/api/v2/chats/${chatId}/`, {
+								headers: {
+									Accept: "application/json, text/plain, */*",
+									source: "web",
+									version,
+									"x-request-id": crypto.randomUUID(),
+								},
+							});
+							if (!historyRes.ok) continue;
+							const detail = await historyRes.json();
+							const messages = detail?.data?.chat?.history?.messages;
+							if (!messages || typeof messages !== "object") continue;
+							const entries = Object.entries(messages) as Array<
+								[string, { id?: unknown; role?: unknown }]
+							>;
+							for (let index = entries.length - 1; index >= 0; index--) {
+								const [key, item] = entries[index] ?? [];
+								if (!item || item.role !== "assistant") continue;
+								const candidate = typeof item.id === "string" ? item.id : key;
+								if (candidate && candidate !== parentMessageId) {
+									assistantMessageId = candidate;
+									break;
+								}
+							}
+							if (assistantMessageId) break;
+						}
+						if (!assistantMessageId) {
+							return {
+								ok: false as const,
+								status: 502,
+								error: `Qwen chat ${chatId} completed but no new assistant message id appeared in history`,
+								stage: "history" as const,
+							};
+						}
+					}
+
 					return {
 						ok: true as const,
 						data: fullText,
+						assistantMessageId,
 						meta: { status: res.status, contentType, bytes, firstByte: Boolean(firstByteAt) },
 					};
 				} catch (err) {
@@ -337,9 +405,13 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				message: params.message,
 				fid,
 				childId,
+				parentMessageId,
 				requestId,
 				idleTimeoutMs: QWEN_STREAM_IDLE_TIMEOUT_MS,
 				version: runtime.version,
+				historyPollAttempts: QWEN_HISTORY_POLL_ATTEMPTS,
+				historyPollIntervalMs: QWEN_HISTORY_POLL_INTERVAL_MS,
+				trackParent: stateful,
 			},
 		);
 
@@ -349,6 +421,20 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		])) as QwenCompletionResult;
 
 		if (responseData.ok) {
+			if (stateful) {
+				if (!responseData.assistantMessageId) {
+					return {
+						ok: false,
+						status: 502,
+						error: `Qwen stateful chat ${chatId} returned no assistant message id`,
+					};
+				}
+				this.chatId = chatId;
+				this.parentMessageId = responseData.assistantMessageId;
+				console.log(
+					`[QwenWeb] stage=state:updated chatId=${chatId} parentId=${this.parentMessageId}`,
+				);
+			}
 			if (responseData.meta) {
 				console.log(
 					`[QwenWeb] stage=completion:ok status=${responseData.meta.status} contentType=${responseData.meta.contentType || "unknown"} bytes=${responseData.meta.bytes} firstByte=${responseData.meta.firstByte}`,
