@@ -143,6 +143,33 @@ describe("chat completions response format", () => {
 		expect(json.choices[0]?.message.tool_calls?.[0]?.function.name).toBe("exec");
 	});
 
+	test("canonical response preserves reasoning and progress with multiple tool calls", async () => {
+		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+		const mockClient = createMockClient(
+			canonical({
+				type: "tool_call",
+				content: "Vou verificar dois pontos em paralelo.",
+				reasoning_content: "Need two independent observations.",
+				calls: [
+					{ name: "exec", arguments: { command: "pwd" } },
+					{ name: "exec", arguments: { command: "ls" } },
+				],
+			}),
+		);
+		const body: ChatCompletionRequest = {
+			model: "test",
+			messages: [{ role: "user", content: "Inspect" }],
+			tools: [EXEC_TOOL],
+			parallel_tool_calls: true,
+		};
+		const res = await handleChatCompletions(body, mockClient as any);
+		const json = (await res.json()) as ChatCompletionResponse;
+		expect(json.choices[0]?.message.content).toBe("Vou verificar dois pontos em paralelo.");
+		expect(json.choices[0]?.message.reasoning_content).toBe("Need two independent observations.");
+		expect(json.choices[0]?.message.tool_calls).toHaveLength(2);
+		expect(json.choices[0]?.finish_reason).toBe("tool_calls");
+	});
+
 	test("canonical tool_calls stream is validated before SSE starts", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
 		const mockClient = createMockClient(
@@ -159,6 +186,37 @@ describe("chat completions response format", () => {
 		const text = await res.text();
 		expect(text).toContain('"tool_calls"');
 		expect(text).toContain("call_gw_");
+		expect(text).toContain("[DONE]");
+	});
+
+	test("canonical tool stream emits reasoning, progress, indexed calls, then tool_calls finish", async () => {
+		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+		const mockClient = createMockClient(
+			canonical({
+				type: "tool_call",
+				content: "Checking now.",
+				reasoning_content: "Need evidence.",
+				calls: [
+					{ name: "exec", arguments: { command: "pwd" } },
+					{ name: "exec", arguments: { command: "ls" } },
+				],
+			}),
+		);
+		const body: ChatCompletionRequest = {
+			model: "test",
+			stream: true,
+			messages: [{ role: "user", content: "Inspect" }],
+			tools: [EXEC_TOOL],
+			parallel_tool_calls: true,
+		};
+		const res = await handleChatCompletions(body, mockClient as any);
+		expect(res.status).toBe(200);
+		const text = await res.text();
+		expect(text).toContain('"reasoning_content":"Need evidence."');
+		expect(text).toContain('"content":"Checking now."');
+		expect(text).toContain('"index":0');
+		expect(text).toContain('"index":1');
+		expect(text).toContain('"finish_reason":"tool_calls"');
 		expect(text).toContain("[DONE]");
 	});
 
@@ -204,6 +262,7 @@ describe("chat completions response format", () => {
 				{
 					role: "assistant",
 					content: null,
+					reasoning_content: "Need directory contents.",
 					tool_calls: [
 						{
 							id: "call_abc123",
