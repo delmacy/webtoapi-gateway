@@ -72,7 +72,11 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		);
 	}
 
-	private getRuntimeTarget(chatId?: string): { origin: string; completionEndpoint?: string; version: string } {
+	private getRuntimeTarget(chatId?: string): {
+		origin: string;
+		completionEndpoint?: string;
+		version: string;
+	} {
 		const profile = runtimeProfiles.get(this.providerId);
 		const origin = profile?.origin?.startsWith("https://") ? profile.origin : QWEN_FALLBACK_ORIGIN;
 		let completionEndpoint: string | undefined;
@@ -181,7 +185,18 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		);
 
 		const completionEval = page.evaluate(
-			async ({ baseUrl, completionEndpoint, chatId, model, message, fid, childId, requestId, idleTimeoutMs, version }) => {
+			async ({
+				baseUrl,
+				completionEndpoint,
+				chatId,
+				model,
+				message,
+				fid,
+				childId,
+				requestId,
+				idleTimeoutMs,
+				version,
+			}) => {
 				const requestBody = {
 					stream: true,
 					version: "2.1",
@@ -257,7 +272,12 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 
 					const reader = res.body?.getReader();
 					if (!reader) {
-						return { ok: false as const, status: 500, error: "Qwen response has no body", stage: "headers" as const };
+						return {
+							ok: false as const,
+							status: 500,
+							error: "Qwen response has no body",
+							stage: "headers" as const,
+						};
 					}
 
 					const decoder = new TextDecoder();
