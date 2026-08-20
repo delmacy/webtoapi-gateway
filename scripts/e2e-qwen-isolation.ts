@@ -57,7 +57,10 @@ async function post(
 }
 
 function expectStateful(response: Response, relation: string, mode: string): void {
-	assert(header(response, "x-webtoapi-session-source") === "override", "Expected override session source");
+	assert(
+		header(response, "x-webtoapi-session-source") === "override",
+		"Expected override session source",
+	);
 	assert(header(response, "x-webtoapi-stateful") === "true", "Expected stateful Qwen session");
 	assert(
 		header(response, "x-webtoapi-history-relation") === relation,
@@ -91,7 +94,10 @@ function initialBody(marker: string, reset = false): ChatCompletionRequest {
 
 function firstToolCall(json: ChatCompletionResponse, expectedValue: string): ToolCallOutput {
 	const choice = json.choices[0];
-	assert(choice?.finish_reason === "tool_calls", `Expected tool_calls, got ${choice?.finish_reason}`);
+	assert(
+		choice?.finish_reason === "tool_calls",
+		`Expected tool_calls, got ${choice?.finish_reason}`,
+	);
 	const call = choice.message.tool_calls?.[0];
 	assert(call, "Expected one tool call");
 	assert(call.function.name === TOOL.function.name, `Unexpected tool ${call.function.name}`);
@@ -116,7 +122,8 @@ function continuationBody(
 				content: JSON.stringify({
 					ok: true,
 					value: finalValue,
-					instruction: "Return this value exactly in the final answer and request no further action.",
+					instruction:
+						"Return this value exactly in the final answer and request no further action.",
 				}),
 			},
 		],
@@ -147,7 +154,10 @@ const initialB = initialBody("qwen-B");
 const b = await post(sessionB, initialB);
 expectStateful(b.response, "initial", "full");
 const callB = firstToolCall(b.json, "qwen-B");
-assert(callA.id !== callB.id, "Sessions A and B unexpectedly received the same gateway tool_call.id");
+assert(
+	callA.id !== callB.id,
+	"Sessions A and B unexpectedly received the same gateway tool_call.id",
+);
 console.log("B bootstrap: independent stateful full prompt");
 
 const continuationA = continuationBody(initialA, callA, "qwen-A-ok");
