@@ -2,7 +2,6 @@ import type { Page } from "playwright-core";
 import { textToStream } from "../shared/stream-helpers.ts";
 import type { ProviderSendParams } from "../types.ts";
 import { ProviderApiError, SessionExpiredError, withTimeout } from "../types.ts";
-import type { ClaudeWebAuth } from "./auth.ts";
 import { ClaudeWebClient } from "./client.ts";
 
 const ROOT_MESSAGE_UUID = "00000000-0000-4000-8000-000000000000";
@@ -33,10 +32,6 @@ export class ClaudeStatefulWebClient extends ClaudeWebClient {
 	private statefulOrganizationId: string | undefined;
 	private conversationUuid: string | undefined;
 	private parentMessageUuid: string | undefined;
-
-	constructor(auth: ClaudeWebAuth) {
-		super(auth);
-	}
 
 	override async sendMessage(params: ProviderSendParams): Promise<ReadableStream<Uint8Array>> {
 		if (!params.statefulSession) return super.sendMessage(params);
@@ -86,9 +81,7 @@ export class ClaudeStatefulWebClient extends ClaudeWebClient {
 			if (!res.ok) return { ok: false as const, status: res.status };
 			const orgs = (await res.json()) as Array<{ uuid?: string }>;
 			const uuid = orgs[0]?.uuid;
-			return uuid
-				? { ok: true as const, uuid }
-				: { ok: false as const, status: 500 };
+			return uuid ? { ok: true as const, uuid } : { ok: false as const, status: 500 };
 		});
 		if (!result.ok) {
 			if (result.status === 401) throw new SessionExpiredError(this.providerId);
