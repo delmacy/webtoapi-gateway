@@ -6,7 +6,7 @@ import {
 	parseGatewayEnvelope,
 } from "../src/protocol/parser.ts";
 import { validateToolArguments } from "../src/protocol/schema-validator.ts";
-import { GW_JSON_END, GW_JSON_START, GatewayProtocolError } from "../src/protocol/types.ts";
+import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "../src/protocol/types.ts";
 
 const EXEC_TOOL: ToolDefinition = {
 	type: "function",
@@ -106,12 +106,18 @@ describe("canonical tool calls", () => {
 	});
 
 	test("rejects unknown tool names rather than treating them as text", () => {
-		const text = envelope({ type: "tool_call", calls: [{ name: "delete_everything", arguments: {} }] });
+		const text = envelope({
+			type: "tool_call",
+			calls: [{ name: "delete_everything", arguments: {} }],
+		});
 		expectProtocolError(() => parseCanonicalToolResponse(text, [EXEC_TOOL]), "unknown_tool");
 	});
 
 	test("rejects tool calls when the request exposed no tools", () => {
-		const text = envelope({ type: "tool_call", calls: [{ name: "exec", arguments: { command: "ls" } }] });
+		const text = envelope({
+			type: "tool_call",
+			calls: [{ name: "exec", arguments: { command: "ls" } }],
+		});
 		expectProtocolError(() => parseCanonicalToolResponse(text), "unexpected_tool_call");
 	});
 
