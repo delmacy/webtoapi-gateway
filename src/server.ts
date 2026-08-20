@@ -37,7 +37,7 @@ configureAgentLayer(
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type, Authorization",
+	"Access-Control-Allow-Headers": "Content-Type, Authorization, X-WebToAPI-Session-Id",
 };
 
 function withCors(res: Response): Response {
@@ -109,6 +109,7 @@ async function handleHealthRoute(): Promise<Response> {
 		agent: {
 			mode: config.agentMode,
 			activeSessions: agentSessions.length,
+			stableSessions: agentSessions.filter((session) => session.sessionStable).length,
 			maxConcurrencyPerProvider: config.agentMaxConcurrencyPerProvider,
 			minIntervalMs: config.agentMinIntervalMs,
 			maxToolTurns: config.agentMaxToolTurns,
@@ -140,7 +141,8 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 		);
 	}
 
-	return handleChatCompletions(body, provider);
+	const sessionIdOverride = req.headers.get("x-webtoapi-session-id")?.trim() || undefined;
+	return handleChatCompletions(body, provider, { sessionIdOverride });
 }
 
 async function handleModelsRoute(): Promise<Response> {
