@@ -17,13 +17,18 @@ function safeOrigin(url: string): string | undefined {
 	}
 }
 
-function safeRequestKeys(request: Request): string[] | undefined {
+function safeRequestMetadata(request: Request): { requestKeys?: string[]; model?: string } {
 	try {
 		const body = request.postDataJSON();
-		if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-		return Object.keys(body).slice(0, 32);
+		if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+		const record = body as Record<string, unknown>;
+		const model = typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+		return {
+			requestKeys: Object.keys(record).slice(0, 32),
+			model,
+		};
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
@@ -31,13 +36,15 @@ function observeRequest(providerId: string, request: Request, transport?: Runtim
 	const url = request.url();
 	const headers = request.headers();
 	const clientVersion = headers.version?.trim();
+	const metadata = safeRequestMetadata(request);
 	runtimeProfiles.update(providerId, {
 		origin: safeOrigin(url),
 		endpoint: url,
 		transport: transport ?? "unknown",
 		requestMethod: request.method(),
 		clientVersion: clientVersion || undefined,
-		requestKeys: safeRequestKeys(request),
+		requestKeys: metadata.requestKeys,
+		model: metadata.model,
 		source: "network",
 	});
 }
