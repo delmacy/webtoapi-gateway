@@ -37,7 +37,8 @@ configureAgentLayer(
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type, Authorization, X-WebToAPI-Session-Id",
+	"Access-Control-Allow-Headers":
+		"Content-Type, Authorization, X-WebToAPI-Session-Id, X-OpenCode-Session",
 };
 
 function withCors(res: Response): Response {
@@ -141,7 +142,10 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 		);
 	}
 
-	const sessionIdOverride = req.headers.get("x-webtoapi-session-id")?.trim() || undefined;
+	const sessionIdOverride =
+		req.headers.get("x-webtoapi-session-id")?.trim() ||
+		req.headers.get("x-opencode-session")?.trim() ||
+		undefined;
 	return handleChatCompletions(body, provider, { sessionIdOverride });
 }
 
