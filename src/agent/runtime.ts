@@ -188,7 +188,7 @@ export class AgentRuntime {
 		snapshot.requests += 1;
 		this.sessions.set(sessionId, snapshot);
 
-		if (toolTurns > this.config.maxToolTurns) {
+		if (this.config.mode === "optimized" && toolTurns > this.config.maxToolTurns) {
 			return {
 				body: optimizedBody,
 				sessionId,
@@ -201,7 +201,7 @@ export class AgentRuntime {
 		}
 
 		const repeated = maxConsecutiveIdentical(fingerprints);
-		if (repeated > this.config.maxIdenticalToolCalls) {
+		if (this.config.mode === "optimized" && repeated > this.config.maxIdenticalToolCalls) {
 			return {
 				body: optimizedBody,
 				sessionId,
