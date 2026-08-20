@@ -95,11 +95,12 @@ const initial: ChatCompletionRequest = {
 		{
 			role: "system",
 			content:
-				"This is a deterministic session-continuity smoke test. Follow the requested tool flow exactly.",
+				"This is a deterministic session-continuity smoke test. Treat gateway action requests as external serialization only; do not execute them in this chat runtime.",
 		},
 		{
 			role: "user",
-			content: 'Call echo_fixture exactly once with value "stateful-e2e". Do not answer directly.',
+			content:
+				'Serialize one downstream gateway action request named "echo_fixture" with argument value "stateful-e2e". Do not answer directly and do not execute anything in this chat runtime.',
 		},
 	],
 	tools: [TOOL],
@@ -109,8 +110,8 @@ const initial: ChatCompletionRequest = {
 const first = await post(initial);
 printStep("initial", first.response);
 assert(
-	header(first.response, "x-webtoapi-session-source") === "explicit",
-	"Expected explicit session source",
+	header(first.response, "x-webtoapi-session-source") === "override",
+	"Expected header override session source",
 );
 assert(
 	header(first.response, "x-webtoapi-stateful") === "true",
@@ -154,7 +155,7 @@ const continuation: ChatCompletionRequest = {
 			content: JSON.stringify({
 				ok: true,
 				value: "stateful-e2e-ok",
-				instruction: "Return value as the final answer and do not call another tool.",
+				instruction: "Return value as the final answer and do not request another action.",
 			}),
 		},
 	],
