@@ -44,9 +44,7 @@ function messages(...contents: string[]): ChatMessage[] {
 
 describe("canonical event normalization", () => {
 	test("stable JSON and hashes ignore object key order", () => {
-		expect(stableJson({ b: 2, a: { y: 2, x: 1 } })).toBe(
-			stableJson({ a: { x: 1, y: 2 }, b: 2 }),
-		);
+		expect(stableJson({ b: 2, a: { y: 2, x: 1 } })).toBe(stableJson({ a: { x: 1, y: 2 }, b: 2 }));
 		expect(semanticHash({ b: 2, a: 1 })).toBe(semanticHash({ a: 1, b: 2 }));
 	});
 
