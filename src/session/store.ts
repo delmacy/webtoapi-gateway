@@ -1,14 +1,14 @@
 import type { ChatMessage, ToolDefinition } from "../openai/types.ts";
 import {
+	type CanonicalEvent,
 	normalizeOpenAiMessages,
 	snapshotToolRegistry,
-	type CanonicalEvent,
 	type ToolRegistrySnapshot,
 } from "./canonical.ts";
 import {
-	reconcileCanonicalHistory,
 	type HistoryReconciliation,
 	type HistoryRelation,
+	reconcileCanonicalHistory,
 } from "./reconciler.ts";
 
 export interface SessionHistorySnapshot {
@@ -63,9 +63,7 @@ export class SessionEventStore {
 		const previous = existing?.events ?? [];
 		const history = reconcileCanonicalHistory(previous, incoming);
 		const toolRegistryChanged = (existing?.toolRegistry?.hash ?? "") !== (registry?.hash ?? "");
-		const epoch = existing
-			? existing.epoch + (history.requiresRehydrate ? 1 : 0)
-			: 1;
+		const epoch = existing ? existing.epoch + (history.requiresRehydrate ? 1 : 0) : 1;
 		const revision = (existing?.revision ?? 0) + 1;
 
 		this.sessions.set(sessionId, {
