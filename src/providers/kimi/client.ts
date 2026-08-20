@@ -2,17 +2,12 @@ import type { Page } from "playwright-core";
 import { BrowserManager } from "../../browser/manager.ts";
 import { BaseApiClient } from "../factory/base-api-client.ts";
 import type { ApiClientConfig, NormalizedSendParams } from "../factory/types.ts";
-import type { BrowserCookie } from "../shared/cookie-parser.ts";
+import { type BrowserCookie, parseCookieHeader } from "../shared/cookie-parser.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import type { StreamResult } from "../types.ts";
 import type { KimiWebAuth } from "./auth.ts";
 import { parseKimiStream } from "./stream.ts";
 
-/**
- * Kimi's international web chat backend lives on www.kimi.com even when the
- * authentication flow starts on kimi.ai. The captured access token is the
- * portable credential; browser cookies remain scoped to their original site.
- */
 const KIMI_CHAT_BASE_URL = "https://www.kimi.com";
 
 export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
@@ -20,7 +15,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 
 	protected readonly config: ApiClientConfig = {
 		hostKey: "kimi.com",
-		startUrl: `${KIMI_CHAT_BASE_URL}/`,
+		startUrl: "https://www.kimi.com/",
 		cookieDomain: ".kimi.com",
 		defaultModel: "moonshot-v1-32k",
 		models: [
@@ -33,35 +28,49 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 	private readonly baseUrl = KIMI_CHAT_BASE_URL;
 
 	protected getCookies(): BrowserCookie[] {
-		// Authentication may originate on kimi.ai, whose cookies cannot be replayed
-		// on kimi.com. Runtime auth is therefore driven by the captured access token.
 		return [];
 	}
 
+	/**
+	 * Authentication may be captured from kimi.ai, but the international chat
+	 * transport is served by www.kimi.com. Keep the browser runtime on that
+	 * backend and rely on the captured access token for Authorization.
+	 */
 	protected override async getPage(): Promise<Page> {
 		if (this.page) {
 			try {
 				await this.page.evaluate(() => document.readyState);
-				if (this.page.url().includes("kimi.com")) return this.page;
+				return this.page;
 			} catch {
-				/* recreate below */
+				this.page = null;
 			}
-			this.page = null;
 		}
 
 		const bm = BrowserManager.getInstance();
-		this.page = await bm.getPage("kimi.com", `${this.baseUrl}/`);
+		this.page = await bm.getPage(this.config.hostKey, this.config.startUrl);
+
+		const cookie = this.auth.cookie || "";
+		if (cookie.trim()) {
+			const cookies = parseCookieHeader(cookie, ".kimi.com").map((c) => ({
+				...c,
+				...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-") ? { secure: true } : {}),
+			}));
+			if (cookies.length > 0) await bm.addCookies(cookies);
+		}
 		return this.page;
 	}
 
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
-		const authToken = this.auth.accessToken;
+		const bm = BrowserManager.getInstance();
+		const ctx = await bm.getContext();
+		const cookies = await ctx.cookies([this.baseUrl]);
+		const kimiAuthCookie = cookies.find((c) => c.name === "kimi-auth" || c.name === "access_token")?.value;
+		const authToken = this.auth.accessToken || kimiAuthCookie;
 		if (!authToken) {
 			return {
 				ok: false,
 				status: 401,
-				error:
-					"Kimi: no captured access token. Re-run webauth while logged in to kimi.ai or kimi.com.",
+				error: "Kimi: no credentials. Run webauth to refresh login.",
 			};
 		}
 
@@ -121,17 +130,17 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 				const arr = await res.arrayBuffer();
 				const u8 = new Uint8Array(arr);
 				const texts: string[] = [];
-				const framePreviews: string[] = [];
+				const framePreview: string[] = [];
 				let o = 0;
 				while (o + 5 <= u8.length) {
 					const flags = u8[o] ?? 0;
 					const len = new DataView(u8.buffer, u8.byteOffset + o + 1, 4).getUint32(0, false);
 					if (o + 5 + len > u8.length) break;
 					const chunk = u8.slice(o + 5, o + 5 + len);
-					const decoded = new TextDecoder().decode(chunk);
-					if (framePreviews.length < 4) framePreviews.push(`flags=${flags} ${decoded.slice(0, 240)}`);
 					try {
+						const decoded = new TextDecoder().decode(chunk);
 						const obj = JSON.parse(decoded);
+						if (framePreview.length < 12) framePreview.push(`flags=${flags} ${decoded.slice(0, 500)}`);
 						if (obj.error) {
 							return {
 								ok: false as const,
@@ -139,25 +148,30 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 								error: obj.error.message || obj.error.code || JSON.stringify(obj.error).slice(0, 400),
 							};
 						}
+
 						const op = obj.op || "";
-						const mask = obj.mask || "";
-						if (
-							obj.block?.text?.content &&
-							(op === "append" || op === "set") &&
-							(!mask || mask === "block.text.content")
-						) {
+						if (obj.block?.text?.content && (op === "append" || op === "set")) {
 							texts.push(obj.block.text.content);
 						} else if (obj.text?.content && (op === "append" || op === "set")) {
 							texts.push(obj.text.content);
 						}
-						if (!op && obj.message?.role === "assistant" && obj.message?.blocks) {
+
+						// Current Kimi frames use op=set/op=append around complete message
+						// objects. Extract assistant blocks even when op is present; older
+						// parsers only handled message.blocks when op was absent.
+						if (
+							obj.message?.role === "assistant" &&
+							Array.isArray(obj.message?.blocks) &&
+							(op === "set" || op === "append" || !op)
+						) {
 							for (const blk of obj.message.blocks) {
-								if (blk.text?.content) texts.push(blk.text.content);
+								if (blk?.text?.content) texts.push(blk.text.content);
 							}
 						}
+
 						if (obj.done) break;
 					} catch {
-						/* trailer/control frames can be non-JSON */
+						/* ignore non-JSON control frames */
 					}
 					o += 5 + len;
 				}
@@ -166,7 +180,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					return {
 						ok: false as const,
 						status: 502,
-						error: `Kimi returned ${u8.length} bytes but no assistant text was decoded. Frames: ${framePreviews.join(" | ")}`,
+						error: `Kimi returned ${u8.length} bytes but no assistant text was decoded. Frames: ${framePreview.join(" | ")}`,
 					};
 				}
 				return { ok: true as const, text: texts.join("") };
