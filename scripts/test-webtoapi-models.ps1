@@ -18,6 +18,16 @@ function Get-GatewayModels {
     }
 }
 
+function Quote-ProcessArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) { return '""' }
+    # The prompts used by this smoke test do not contain shell metacharacters.
+    # Escape embedded quotes so ProcessStartInfo.Arguments also works on
+    # Windows PowerShell 5.1, where ProcessStartInfo.ArgumentList is absent.
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
 function Invoke-OpenCodeTest {
     param(
         [string]$Model,
@@ -37,10 +47,12 @@ function Invoke-OpenCodeTest {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
-    $psi.ArgumentList.Add("run")
-    $psi.ArgumentList.Add($Prompt)
-    $psi.ArgumentList.Add("--model")
-    $psi.ArgumentList.Add($modelRef)
+
+    # ProcessStartInfo.ArgumentList only exists on newer .NET versions.
+    # Use the classic Arguments property for Windows PowerShell 5.1 compatibility.
+    $quotedPrompt = Quote-ProcessArgument $Prompt
+    $quotedModel = Quote-ProcessArgument $modelRef
+    $psi.Arguments = "run $quotedPrompt --model $quotedModel"
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $psi
@@ -52,7 +64,7 @@ function Invoke-OpenCodeTest {
         $stderrTask = $process.StandardError.ReadToEndAsync()
 
         if (-not $process.WaitForExit($TimeoutSec * 1000)) {
-            try { $process.Kill($true) } catch {}
+            try { $process.Kill() } catch {}
             return [PSCustomObject]@{
                 Model    = $Model
                 Stage    = $Stage
@@ -64,6 +76,8 @@ function Invoke-OpenCodeTest {
             }
         }
 
+        # Ensure async stdout/stderr reads are fully drained before reading Result.
+        $process.WaitForExit()
         $stdout = $stdoutTask.Result.Trim()
         $stderr = $stderrTask.Result.Trim()
         $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
