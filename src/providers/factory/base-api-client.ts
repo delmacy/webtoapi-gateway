@@ -28,34 +28,15 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 		this.auth = auth;
 	}
 
-	// ── Abstract methods that every subclass MUST implement ──────────
-
-	/** Build browser cookies from the stored auth credentials. */
 	protected abstract getCookies(): BrowserCookie[];
-
-	/**
-	 * Execute the provider-specific API call inside the browser page.
-	 * Return an `EvalResult` — the base class handles error routing
-	 * and stream wrapping.
-	 */
 	protected abstract callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult>;
-
-	/** Delegate to the provider-specific SSE / stream parser. */
 	protected abstract parseStreamImpl(
 		body: ReadableStream<Uint8Array>,
 		onDelta?: (delta: string) => void,
 	): Promise<StreamResult>;
 
-	// ── Optional hooks (override when needed) ───────────────────────
-
-	/** Extra initialisation after the page is ready (e.g. org discovery, token refresh). */
 	protected async onInit(): Promise<void> {}
 
-	/**
-	 * Called when `sendMessage` catches an error.  Return a stream to
-	 * use an alternative path (e.g. DOM fallback); rethrow or return
-	 * `null` to propagate the original error.
-	 */
 	protected async handleError(
 		err: Error,
 		_page: Page,
@@ -63,8 +44,6 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 	): Promise<ReadableStream<Uint8Array> | null> {
 		throw err;
 	}
-
-	// ── Public WebProviderClient implementation ─────────────────────
 
 	async init(): Promise<void> {
 		await this.getPage();
@@ -75,12 +54,14 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 		message: string;
 		model?: string;
 		signal?: AbortSignal;
+		sessionId?: string;
 	}): Promise<ReadableStream<Uint8Array>> {
 		const page = await this.getPage();
 		const normalized: NormalizedSendParams = {
 			message: params.message,
 			model: params.model || this.config.defaultModel,
 			signal: params.signal,
+			sessionId: params.sessionId,
 		};
 
 		try {
@@ -88,8 +69,6 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 			if (!result.ok) {
 				throwIfSessionExpired(this.providerId, result.status);
 				const msg = `${this.providerId} API error: ${result.status} - ${result.error}`;
-				// Propagate provider 4xx as ProviderApiError so callers can
-				// return the same status to the client (avoid pointless retries).
 				if (result.status && result.status >= 400 && result.status < 500) {
 					throw new ProviderApiError(result.status, msg);
 				}
@@ -118,13 +97,6 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 		this.page = null;
 	}
 
-	// ── Protected helpers ────────────────────────────────────────────
-
-	/**
-	 * Return a live browser page, creating one via `BrowserManager` if
-	 * necessary.  Subclasses may override for custom page bootstrapping
-	 * (e.g. ChatGPT's oaistatic wait).
-	 */
 	protected async getPage(): Promise<Page> {
 		this.page = await ensurePage(this.page, {
 			hostKey: this.config.hostKey,
