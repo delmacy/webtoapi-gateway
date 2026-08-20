@@ -15,6 +15,8 @@ import type {
 	ToolDefinition,
 	ToolMessage,
 } from "../openai/types.ts";
+import { parseCanonicalToolResponse } from "../protocol/parser.ts";
+import { GW_JSON_END, GW_JSON_START } from "../protocol/types.ts";
 import { extractToolCalls, hasToolCall } from "./parser.ts";
 import { buildToolPrompt, detectLanguage } from "./prompt.ts";
 
@@ -43,8 +45,31 @@ function extractTextContent(content: string | { type: string; text?: string }[])
 		.join("");
 }
 
-function formatAssistantMsg(msg: AssistantMessage): string | null {
+function historicalArguments(raw: string): Record<string, unknown> {
+	try {
+		const parsed = JSON.parse(raw);
+		if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) return parsed;
+	} catch {
+		// Preserve malformed historical arguments as inert text instead of guessing.
+	}
+	return { _raw: raw };
+}
+
+function formatAssistantMsg(msg: AssistantMessage, canonical: boolean): string | null {
 	if (msg.tool_calls && msg.tool_calls.length > 0) {
+		if (canonical) {
+			const calls = msg.tool_calls.map((tc) => ({
+				name: tc.function.name,
+				arguments: historicalArguments(tc.function.arguments),
+			}));
+			return [
+				"Assistant protocol action:",
+				GW_JSON_START,
+				JSON.stringify({ type: "tool_call", calls }),
+				GW_JSON_END,
+			].join("\n");
+		}
+
 		const calls = msg.tool_calls.map(
 			(tc) =>
 				`\`\`\`tool_json\n{"tool":"${tc.function.name}","parameters":${tc.function.arguments}}\n\`\`\``,
@@ -60,7 +85,7 @@ function formatToolResult(msg: ToolMessage): string {
 	);
 }
 
-function formatMessage(msg: ChatMessage): string | null {
+function formatMessage(msg: ChatMessage, canonical: boolean): string | null {
 	switch (msg.role) {
 		case "system":
 		case "developer":
@@ -70,7 +95,7 @@ function formatMessage(msg: ChatMessage): string | null {
 			return `Human: ${extractTextContent(msg.content)}`;
 
 		case "assistant":
-			return formatAssistantMsg(msg as AssistantMessage);
+			return formatAssistantMsg(msg as AssistantMessage, canonical);
 
 		case "tool":
 			return formatToolResult(msg as ToolMessage);
@@ -135,7 +160,7 @@ export function buildPromptFromMessages(
 	}
 
 	for (const msg of messages) {
-		const formatted = formatMessage(msg);
+		const formatted = formatMessage(msg, compactTools);
 		if (formatted) parts.push(formatted);
 	}
 
@@ -145,8 +170,8 @@ export function buildPromptFromMessages(
 	if (endsWithToolResult) {
 		parts.push(
 			lang === "cn"
-				? "请根据以上工具执行结果回答用户的问题。"
-				: "Please answer the user's question based on the tool results above.",
+				? "请根据以上真实工具执行结果继续任务。"
+				: "Continue the task using the real tool results above.",
 		);
 	}
 
@@ -155,16 +180,19 @@ export function buildPromptFromMessages(
 
 /**
  * Parse text response and detect tool calls.
- * When tool_calls are detected, content is null per OpenAI convention.
+ * Strict mode requires GW_AGENT_PROTOCOL/1; legacy mode preserves tool_json parsing.
  */
 export function parseToolResponse(
 	text: string,
 	requestedTools?: ToolDefinition[],
+	strictProtocol = false,
 ): {
 	content: string | null;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 } {
+	if (strictProtocol) return parseCanonicalToolResponse(text, requestedTools);
+
 	if (!requestedTools || requestedTools.length === 0 || !hasToolCall(text)) {
 		return { content: text, toolCalls: undefined, finishReason: "stop" };
 	}
