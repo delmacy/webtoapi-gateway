@@ -48,8 +48,6 @@ function textOfUserMessage(message: ChatMessage): string {
 }
 
 function stableHash(input: string): string {
-	// FNV-1a style 32-bit hash: deterministic, cheap, and sufficient for an
-	// in-memory correlation key. It is not used for authentication/security.
 	let hash = 0x811c9dc5;
 	for (let i = 0; i < input.length; i++) {
 		hash ^= input.charCodeAt(i);
@@ -151,7 +149,8 @@ export class AgentRuntime {
 		const rawChars = estimateChars(body);
 		const fingerprints = toolCallFingerprints(body.messages);
 		const toolTurns = body.messages.filter(
-			(message) => message.role === "assistant" && ((message as AssistantMessage).tool_calls?.length ?? 0) > 0,
+			(message) =>
+				message.role === "assistant" && ((message as AssistantMessage).tool_calls?.length ?? 0) > 0,
 		).length;
 
 		let optimizedBody = body;
