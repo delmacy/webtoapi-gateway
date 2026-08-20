@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Page } from "playwright-core";
 import { BaseApiClient } from "../factory/base-api-client.ts";
 import type { ApiClientConfig, NormalizedSendParams } from "../factory/types.ts";
+import { runtimeProfiles } from "../runtime-profile.ts";
 import { parseCookieHeader } from "../shared/cookie-parser.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import type { StreamResult } from "../types.ts";
@@ -9,13 +10,14 @@ import type { QwenWebAuth } from "./auth.ts";
 import { parseQwenStream } from "./stream.ts";
 
 const QWEN_WEB_VERSION = "0.2.83";
+const QWEN_FALLBACK_ORIGIN = "https://chat.qwen.ai";
 
 export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 	readonly providerId = "qwen-web";
 
 	protected readonly config: ApiClientConfig = {
 		hostKey: "qwen.ai",
-		startUrl: "https://chat.qwen.ai/",
+		startUrl: `${QWEN_FALLBACK_ORIGIN}/`,
 		cookieDomain: ".qwen.ai",
 		defaultModel: "qwen3.5-plus",
 		models: [
@@ -24,8 +26,6 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		],
 	};
 
-	private readonly baseUrl = "https://chat.qwen.ai";
-
 	protected getCookies() {
 		return parseCookieHeader(
 			this.auth.cookie || `qwen_session=${this.auth.sessionToken}`,
@@ -33,7 +33,28 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		);
 	}
 
+	private getRuntimeTarget(chatId?: string): { origin: string; completionEndpoint?: string; version: string } {
+		const profile = runtimeProfiles.get(this.providerId);
+		const origin = profile?.origin?.startsWith("https://") ? profile.origin : QWEN_FALLBACK_ORIGIN;
+		let completionEndpoint: string | undefined;
+		if (profile?.endpoint?.includes("/api/v2/chat/completions")) {
+			try {
+				const url = new URL(profile.endpoint);
+				if (chatId) url.searchParams.set("chat_id", chatId);
+				completionEndpoint = url.toString();
+			} catch {
+				completionEndpoint = undefined;
+			}
+		}
+		return {
+			origin,
+			completionEndpoint,
+			version: profile?.clientVersion || QWEN_WEB_VERSION,
+		};
+	}
+
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
+		const initialRuntime = this.getRuntimeTarget();
 		const createChatTimeoutMs = 30_000;
 		const createRequestId = crypto.randomUUID();
 		const createChatResult = await page.evaluate(
@@ -93,11 +114,11 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				}
 			},
 			{
-				baseUrl: this.baseUrl,
+				baseUrl: initialRuntime.origin,
 				timeoutMs: createChatTimeoutMs,
 				model: params.model,
 				requestId: createRequestId,
-				version: QWEN_WEB_VERSION,
+				version: initialRuntime.version,
 			},
 		);
 
@@ -110,15 +131,16 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		}
 
 		const chatId = createChatResult.chatId as string;
+		const runtime = this.getRuntimeTarget(chatId);
 		const fetchTimeoutMs = 300_000;
 		const fid = crypto.randomUUID();
 		const childId = crypto.randomUUID();
 		const requestId = crypto.randomUUID();
 		const responseData = await page.evaluate(
-			async ({ baseUrl, chatId, model, message, fid, childId, requestId, timeoutMs, version }) => {
+			async ({ baseUrl, completionEndpoint, chatId, model, message, fid, childId, requestId, timeoutMs, version }) => {
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
-					const url = `${baseUrl}/api/v2/chat/completions?chat_id=${chatId}`;
+					const url = completionEndpoint || `${baseUrl}/api/v2/chat/completions?chat_id=${chatId}`;
 					const controller = new AbortController();
 					timer = setTimeout(() => controller.abort(), timeoutMs);
 					const requestBody = {
@@ -207,7 +229,8 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				}
 			},
 			{
-				baseUrl: this.baseUrl,
+				baseUrl: runtime.origin,
+				completionEndpoint: runtime.completionEndpoint,
 				chatId,
 				model: params.model,
 				message: params.message,
@@ -215,7 +238,7 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 				childId,
 				requestId,
 				timeoutMs: fetchTimeoutMs,
-				version: QWEN_WEB_VERSION,
+				version: runtime.version,
 			},
 		);
 
