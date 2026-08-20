@@ -89,6 +89,11 @@ const SESSION_SCOPED_CAPABILITIES: Record<string, ProviderSessionCapabilities> =
 		deltaPrompts: true,
 		resettable: true,
 	},
+	"kimi-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
 };
 
 /**
