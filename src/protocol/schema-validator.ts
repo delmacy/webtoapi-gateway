@@ -32,7 +32,8 @@ function schemaList(value: unknown): JsonSchema[] {
 
 function allowedTypes(schema: JsonSchema): string[] {
 	if (typeof schema.type === "string") return [schema.type];
-	if (Array.isArray(schema.type)) return schema.type.filter((value): value is string => typeof value === "string");
+	if (Array.isArray(schema.type))
+		return schema.type.filter((value): value is string => typeof value === "string");
 	return [];
 }
 
@@ -61,7 +62,12 @@ function addIssue(ctx: ValidationContext, path: string, message: string): void {
 	ctx.issues.push({ path, message });
 }
 
-function validateCombinators(value: unknown, schema: JsonSchema, path: string, ctx: ValidationContext): boolean {
+function validateCombinators(
+	value: unknown,
+	schema: JsonSchema,
+	path: string,
+	ctx: ValidationContext,
+): boolean {
 	const allOf = schemaList(schema.allOf);
 	for (const child of allOf) validateValue(value, child, path, ctx);
 
@@ -90,7 +96,12 @@ function validateBranch(value: unknown, schema: JsonSchema, path: string): boole
 	return branch.issues.length === 0;
 }
 
-function validateObject(value: Record<string, unknown>, schema: JsonSchema, path: string, ctx: ValidationContext): void {
+function validateObject(
+	value: Record<string, unknown>,
+	schema: JsonSchema,
+	path: string,
+	ctx: ValidationContext,
+): void {
 	const properties = isRecord(schema.properties) ? schema.properties : {};
 	const required = new Set(
 		Array.isArray(schema.required)
@@ -116,15 +127,26 @@ function validateObject(value: Record<string, unknown>, schema: JsonSchema, path
 		}
 	}
 
-	if (typeof schema.minProperties === "number" && Object.keys(value).length < schema.minProperties) {
+	if (
+		typeof schema.minProperties === "number" &&
+		Object.keys(value).length < schema.minProperties
+	) {
 		addIssue(ctx, path, `must have at least ${schema.minProperties} properties`);
 	}
-	if (typeof schema.maxProperties === "number" && Object.keys(value).length > schema.maxProperties) {
+	if (
+		typeof schema.maxProperties === "number" &&
+		Object.keys(value).length > schema.maxProperties
+	) {
 		addIssue(ctx, path, `must have at most ${schema.maxProperties} properties`);
 	}
 }
 
-function validateArray(value: unknown[], schema: JsonSchema, path: string, ctx: ValidationContext): void {
+function validateArray(
+	value: unknown[],
+	schema: JsonSchema,
+	path: string,
+	ctx: ValidationContext,
+): void {
 	if (typeof schema.minItems === "number" && value.length < schema.minItems) {
 		addIssue(ctx, path, `must contain at least ${schema.minItems} items`);
 	}
@@ -143,11 +165,18 @@ function validateArray(value: unknown[], schema: JsonSchema, path: string, ctx: 
 	}
 
 	if (isRecord(schema.items)) {
-		value.forEach((item, index) => validateValue(item, schema.items as JsonSchema, `${path}[${index}]`, ctx));
+		value.forEach((item, index) => {
+			validateValue(item, schema.items as JsonSchema, `${path}[${index}]`, ctx);
+		});
 	}
 }
 
-function validateString(value: string, schema: JsonSchema, path: string, ctx: ValidationContext): void {
+function validateString(
+	value: string,
+	schema: JsonSchema,
+	path: string,
+	ctx: ValidationContext,
+): void {
 	if (typeof schema.minLength === "number" && value.length < schema.minLength) {
 		addIssue(ctx, path, `must contain at least ${schema.minLength} characters`);
 	}
@@ -156,14 +185,20 @@ function validateString(value: string, schema: JsonSchema, path: string, ctx: Va
 	}
 	if (typeof schema.pattern === "string") {
 		try {
-			if (!new RegExp(schema.pattern).test(value)) addIssue(ctx, path, `must match pattern ${schema.pattern}`);
+			if (!new RegExp(schema.pattern).test(value))
+				addIssue(ctx, path, `must match pattern ${schema.pattern}`);
 		} catch {
 			// Invalid provider/tool schemas are treated as non-enforceable here.
 		}
 	}
 }
 
-function validateNumber(value: number, schema: JsonSchema, path: string, ctx: ValidationContext): void {
+function validateNumber(
+	value: number,
+	schema: JsonSchema,
+	path: string,
+	ctx: ValidationContext,
+): void {
 	if (typeof schema.minimum === "number" && value < schema.minimum) {
 		addIssue(ctx, path, `must be >= ${schema.minimum}`);
 	}
@@ -178,7 +213,12 @@ function validateNumber(value: number, schema: JsonSchema, path: string, ctx: Va
 	}
 }
 
-function validateValue(value: unknown, schema: JsonSchema, path: string, ctx: ValidationContext): void {
+function validateValue(
+	value: unknown,
+	schema: JsonSchema,
+	path: string,
+	ctx: ValidationContext,
+): void {
 	if (ctx.depth > 24) {
 		addIssue(ctx, path, "schema nesting exceeds gateway validation limit");
 		return;
