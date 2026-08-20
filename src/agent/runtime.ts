@@ -4,6 +4,12 @@ import type {
 	ChatMessage,
 	ToolMessage,
 } from "../openai/types.ts";
+import type { HistoryRelation } from "../session/reconciler.ts";
+import {
+	SessionEventStore,
+	type SessionHistorySnapshot,
+	type SessionReconciliation,
+} from "../session/store.ts";
 
 export type AgentMode = "passthrough" | "optimized";
 
@@ -27,12 +33,22 @@ export interface AgentSessionSnapshot {
 	optimizedPromptChars: number;
 	savedPromptChars: number;
 	requests: number;
+	canonicalEvents: number;
+	historyRelation: HistoryRelation;
+	historyEpoch: number;
+	historyRevision: number;
+	commonPrefixEvents: number;
+	deltaEvents: number;
+	toolRegistryHash?: string;
+	toolRegistryChanged: boolean;
+	requiresRehydrate: boolean;
 }
 
 export interface AgentOptimizationResult {
 	body: ChatCompletionRequest;
 	sessionId: string;
 	snapshot: AgentSessionSnapshot;
+	reconciliation: SessionReconciliation;
 	rejection?: { status: number; message: string };
 }
 
@@ -132,6 +148,7 @@ function compactHistoricalToolResults(
 
 export class AgentRuntime {
 	private readonly sessions = new Map<string, SessionState>();
+	private readonly eventStore = new SessionEventStore();
 	private config: AgentRuntimeConfig;
 
 	constructor(config: AgentRuntimeConfig) {
@@ -146,6 +163,12 @@ export class AgentRuntime {
 		this.cleanupExpired();
 		const sessionId = deriveSessionId(body);
 		const now = Date.now();
+		const reconciliation = this.eventStore.reconcile(
+			sessionId,
+			body.messages,
+			body.tools,
+			now,
+		);
 		const rawChars = estimateChars(body);
 		const fingerprints = toolCallFingerprints(body.messages);
 		const toolTurns = body.messages.filter(
@@ -177,6 +200,14 @@ export class AgentRuntime {
 			optimizedPromptChars: 0,
 			savedPromptChars: 0,
 			requests: 0,
+			canonicalEvents: 0,
+			historyRelation: "initial",
+			historyEpoch: 1,
+			historyRevision: 0,
+			commonPrefixEvents: 0,
+			deltaEvents: 0,
+			toolRegistryChanged: false,
+			requiresRehydrate: false,
 		};
 		snapshot.lastActivityAt = now;
 		snapshot.model = body.model;
@@ -185,6 +216,15 @@ export class AgentRuntime {
 		snapshot.optimizedPromptChars += optimizedChars;
 		snapshot.savedPromptChars += Math.max(0, rawChars - optimizedChars);
 		snapshot.requests += 1;
+		snapshot.canonicalEvents = reconciliation.incomingEvents;
+		snapshot.historyRelation = reconciliation.relation;
+		snapshot.historyEpoch = reconciliation.epoch;
+		snapshot.historyRevision = reconciliation.revision;
+		snapshot.commonPrefixEvents = reconciliation.commonPrefixEvents;
+		snapshot.deltaEvents = reconciliation.deltaEvents.length;
+		snapshot.toolRegistryHash = reconciliation.toolRegistry?.hash;
+		snapshot.toolRegistryChanged = reconciliation.toolRegistryChanged;
+		snapshot.requiresRehydrate = reconciliation.requiresRehydrate;
 		this.sessions.set(sessionId, snapshot);
 
 		if (this.config.mode === "optimized" && toolTurns > this.config.maxToolTurns) {
@@ -192,6 +232,7 @@ export class AgentRuntime {
 				body: optimizedBody,
 				sessionId,
 				snapshot: { ...snapshot },
+				reconciliation,
 				rejection: {
 					status: 409,
 					message: `Agent loop guard: session exceeded maxToolTurns=${this.config.maxToolTurns}.`,
@@ -205,6 +246,7 @@ export class AgentRuntime {
 				body: optimizedBody,
 				sessionId,
 				snapshot: { ...snapshot },
+				reconciliation,
 				rejection: {
 					status: 409,
 					message: `Agent loop guard: identical tool call repeated ${repeated} times.`,
@@ -215,16 +257,25 @@ export class AgentRuntime {
 		if (this.config.telemetry) {
 			const saved = Math.max(0, rawChars - optimizedChars);
 			console.log(
-				`[agent] session=${sessionId} model=${body.model} request=${snapshot.requests} toolTurns=${toolTurns} rawChars=${rawChars} optimizedChars=${optimizedChars} savedChars=${saved}`,
+				`[agent] session=${sessionId} model=${body.model} request=${snapshot.requests} toolTurns=${toolTurns} rawChars=${rawChars} optimizedChars=${optimizedChars} savedChars=${saved} history=${reconciliation.relation} prefixEvents=${reconciliation.commonPrefixEvents} deltaEvents=${reconciliation.deltaEvents.length} epoch=${reconciliation.epoch} rehydrate=${reconciliation.requiresRehydrate} toolsChanged=${reconciliation.toolRegistryChanged}`,
 			);
 		}
 
-		return { body: optimizedBody, sessionId, snapshot: { ...snapshot } };
+		return {
+			body: optimizedBody,
+			sessionId,
+			snapshot: { ...snapshot },
+			reconciliation,
+		};
 	}
 
 	getSnapshot(sessionId: string): AgentSessionSnapshot | undefined {
 		const state = this.sessions.get(sessionId);
 		return state ? { ...state } : undefined;
+	}
+
+	getHistorySnapshot(sessionId: string): SessionHistorySnapshot | undefined {
+		return this.eventStore.get(sessionId);
 	}
 
 	listSnapshots(): AgentSessionSnapshot[] {
@@ -238,6 +289,7 @@ export class AgentRuntime {
 		for (const [id, state] of this.sessions) {
 			if (state.lastActivityAt < cutoff) this.sessions.delete(id);
 		}
+		this.eventStore.cleanupBefore(cutoff);
 	}
 }
 
