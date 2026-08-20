@@ -1,7 +1,7 @@
 import type {
 	ModelInfo,
-	ProviderSessionCapabilities,
 	ProviderSendParams,
+	ProviderSessionCapabilities,
 	StreamResult,
 	WebProviderClient,
 	WebProviderFactory,
