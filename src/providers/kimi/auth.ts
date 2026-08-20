@@ -25,9 +25,7 @@ function isKimiUrl(url: string): boolean {
 	}
 }
 
-function cookieHeader(
-	cookies: Array<{ name: string; value: string; domain: string }>,
-): string {
+function cookieHeader(cookies: Array<{ name: string; value: string; domain: string }>): string {
 	return cookies
 		.filter((c) => KIMI_HOST_RE.test(c.domain.replace(/^\./, "")))
 		.map((c) => `${c.name}=${c.value}`)
@@ -171,7 +169,9 @@ export async function loginKimiWeb(params: {
 	const cookies = await context.cookies();
 	const cookieString = cookieHeader(cookies);
 	const userAgent = await matchedPage.evaluate(() => navigator.userAgent);
-	const siteUrl = isKimiUrl(matchedPage.url()) ? new URL(matchedPage.url()).origin : KIMI_AUTH_URLS[0];
+	const siteUrl = isKimiUrl(matchedPage.url())
+		? new URL(matchedPage.url()).origin
+		: KIMI_AUTH_URLS[0];
 
 	params.onProgress(`Authentication captured successfully from ${siteUrl}`);
 
