@@ -164,7 +164,9 @@ describe("chat completions response format", () => {
 
 	test("malformed optimized tool response fails closed with 502", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const mockClient = createMockClient('```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```');
+		const mockClient = createMockClient(
+			'```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```',
+		);
 		const body: ChatCompletionRequest = {
 			model: "test",
 			messages: [{ role: "user", content: "List files" }],
