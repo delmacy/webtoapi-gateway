@@ -1,11 +1,11 @@
 import type { ToolCallOutput, ToolDefinition } from "../openai/types.ts";
 import { validateToolArguments } from "./schema-validator.ts";
 import {
+	type GatewayEnvelope,
+	GatewayProtocolError,
+	type GatewayToolCall,
 	GW_JSON_END,
 	GW_JSON_START,
-	GatewayProtocolError,
-	type GatewayEnvelope,
-	type GatewayToolCall,
 } from "./types.ts";
 
 export interface CanonicalToolResponse {
@@ -48,7 +48,10 @@ export function extractGatewayJson(text: string): string {
 	const start = text.indexOf(GW_JSON_START);
 	const end = text.indexOf(GW_JSON_END, start + GW_JSON_START.length);
 	if (end < start) {
-		throw new GatewayProtocolError("invalid_envelope", "Protocol envelope markers are out of order.");
+		throw new GatewayProtocolError(
+			"invalid_envelope",
+			"Protocol envelope markers are out of order.",
+		);
 	}
 
 	const before = text.slice(0, start).trim();
@@ -68,10 +71,16 @@ function parseToolCall(value: unknown, index: number): GatewayToolCall {
 		throw new GatewayProtocolError("invalid_envelope", `calls[${index}] must be an object.`);
 	}
 	if (typeof value.name !== "string" || value.name.trim().length === 0) {
-		throw new GatewayProtocolError("invalid_envelope", `calls[${index}].name must be a non-empty string.`);
+		throw new GatewayProtocolError(
+			"invalid_envelope",
+			`calls[${index}].name must be a non-empty string.`,
+		);
 	}
 	if (!isRecord(value.arguments)) {
-		throw new GatewayProtocolError("invalid_envelope", `calls[${index}].arguments must be a JSON object.`);
+		throw new GatewayProtocolError(
+			"invalid_envelope",
+			`calls[${index}].arguments must be a JSON object.`,
+		);
 	}
 	return { name: value.name.trim(), arguments: value.arguments };
 }
@@ -89,7 +98,10 @@ export function parseGatewayEnvelope(text: string): GatewayEnvelope {
 	}
 
 	if (!isRecord(decoded) || typeof decoded.type !== "string") {
-		throw new GatewayProtocolError("invalid_envelope", "GW_JSON payload must be an object with a type field.");
+		throw new GatewayProtocolError(
+			"invalid_envelope",
+			"GW_JSON payload must be an object with a type field.",
+		);
 	}
 
 	switch (decoded.type) {
@@ -101,14 +113,20 @@ export function parseGatewayEnvelope(text: string): GatewayEnvelope {
 
 		case "tool_call": {
 			if (!Array.isArray(decoded.calls) || decoded.calls.length === 0) {
-				throw new GatewayProtocolError("invalid_envelope", "tool_call.calls must be a non-empty array.");
+				throw new GatewayProtocolError(
+					"invalid_envelope",
+					"tool_call.calls must be a non-empty array.",
+				);
 			}
 			return { type: "tool_call", calls: decoded.calls.map(parseToolCall) };
 		}
 
 		case "error":
 			if (typeof decoded.message !== "string" || decoded.message.trim().length === 0) {
-				throw new GatewayProtocolError("invalid_envelope", "error.message must be a non-empty string.");
+				throw new GatewayProtocolError(
+					"invalid_envelope",
+					"error.message must be a non-empty string.",
+				);
 			}
 			return { type: "error", message: decoded.message.trim() };
 
