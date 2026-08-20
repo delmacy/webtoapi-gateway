@@ -110,8 +110,8 @@ const initial: ChatCompletionRequest = {
 const first = await post(initial);
 printStep("initial", first.response);
 assert(
-	header(first.response, "x-webtoapi-session-source") === "explicit",
-	"Expected explicit session source",
+	header(first.response, "x-webtoapi-session-source") === "override",
+	`Expected header override session source, got ${header(first.response, "x-webtoapi-session-source") || "<missing>"}`,
 );
 assert(
 	header(first.response, "x-webtoapi-stateful") === "true",
