@@ -1,3 +1,5 @@
+import { fairUseGovernor, type FairUsePolicy } from "../agent/governor.ts";
+import { agentRuntime, type AgentRuntimeConfig } from "../agent/runtime.ts";
 import { evictProviderClient } from "../providers/registry.ts";
 import type { WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
@@ -11,9 +13,18 @@ import type {
 } from "./types.ts";
 
 let _routeTimeoutMs = 300_000;
+let _fairUsePolicy: FairUsePolicy = { maxConcurrency: 1, minIntervalMs: 2500 };
 
 export function setRouteTimeoutSec(sec: number): void {
 	_routeTimeoutMs = sec * 1000;
+}
+
+export function configureAgentLayer(runtimeConfig: AgentRuntimeConfig, fairUsePolicy: FairUsePolicy): void {
+	agentRuntime.configure(runtimeConfig);
+	_fairUsePolicy = {
+		maxConcurrency: Math.max(1, Math.floor(fairUsePolicy.maxConcurrency)),
+		minIntervalMs: Math.max(0, Math.floor(fairUsePolicy.minIntervalMs)),
+	};
 }
 
 function generateId(): string {
@@ -25,17 +36,27 @@ function estimateTokens(text: string): number {
 }
 
 export async function handleChatCompletions(
-	body: ChatCompletionRequest,
+	inputBody: ChatCompletionRequest,
 	client: WebProviderClient,
 ): Promise<Response> {
-	if (!body.messages || body.messages.length === 0) {
+	if (!inputBody.messages || inputBody.messages.length === 0) {
 		return jsonError("messages is required and must not be empty", 400);
 	}
 
-	if (!body.model) {
+	if (!inputBody.model) {
 		return jsonError("model is required", 400);
 	}
 
+	const optimized = agentRuntime.optimize(inputBody);
+	if (optimized.rejection) {
+		return withAgentHeaders(
+			jsonError(optimized.rejection.message, optimized.rejection.status),
+			optimized.sessionId,
+			optimized.snapshot.savedPromptChars,
+		);
+	}
+
+	const body = optimized.body;
 	const id = generateId();
 	const model = body.model;
 	const { prompt, hasTools } = buildPromptFromMessages(body.messages, body.tools, body.tool_choice);
@@ -44,9 +65,10 @@ export async function handleChatCompletions(
 		return jsonError("Could not construct prompt from messages", 400);
 	}
 
+	const release = await fairUseGovernor.acquire(client.providerId, _fairUsePolicy);
 	const handler = body.stream
-		? handleStreaming(id, model, prompt, hasTools, body, client)
-		: handleNonStreaming(id, model, prompt, hasTools, body, client);
+		? handleStreaming(id, model, prompt, hasTools, body, client, release)
+		: handleNonStreaming(id, model, prompt, hasTools, body, client, release);
 
 	const timeout = new Promise<Response>((resolve) =>
 		setTimeout(() => {
@@ -55,7 +77,8 @@ export async function handleChatCompletions(
 		}, _routeTimeoutMs),
 	);
 
-	return Promise.race([handler, timeout]);
+	const response = await Promise.race([handler, timeout]);
+	return withAgentHeaders(response, optimized.sessionId, optimized.snapshot.savedPromptChars);
 }
 
 async function handleNonStreaming(
@@ -65,6 +88,7 @@ async function handleNonStreaming(
 	hasTools: boolean,
 	body: ChatCompletionRequest,
 	client: WebProviderClient,
+	release: () => void,
 ): Promise<Response> {
 	try {
 		const stream = await client.sendMessage({ message: prompt, model });
@@ -104,6 +128,8 @@ async function handleNonStreaming(
 		return Response.json(response);
 	} catch (err) {
 		return providerErrorResponse(err, "non-streaming");
+	} finally {
+		release();
 	}
 }
 
@@ -161,15 +187,13 @@ async function handleStreaming(
 	hasTools: boolean,
 	body: ChatCompletionRequest,
 	client: WebProviderClient,
+	release: () => void,
 ): Promise<Response> {
-	// Await sendMessage BEFORE creating the SSE stream so that pre-stream
-	// errors (auth, rate-limit, model-not-available) return a proper HTTP
-	// error status instead of being buried inside an SSE event that the
-	// client cannot parse as a ChatCompletionChunk.
 	let providerStream: ReadableStream<Uint8Array>;
 	try {
 		providerStream = await client.sendMessage({ message: prompt, model });
 	} catch (err) {
+		release();
 		return providerErrorResponse(err, "streaming (pre-stream)");
 	}
 
@@ -191,8 +215,10 @@ async function handleStreaming(
 				console.error(`[chat-completions] Stream error (mid-stream): ${message}`);
 				w.error(message);
 				w.done();
+			} finally {
+				release();
+				w.close();
 			}
-			w.close();
 		},
 	});
 
@@ -232,6 +258,17 @@ async function streamWithTools(
 		}
 		w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 	}
+}
+
+function withAgentHeaders(response: Response, sessionId: string, savedChars: number): Response {
+	const headers = new Headers(response.headers);
+	headers.set("x-webtoapi-session-id", sessionId);
+	headers.set("x-webtoapi-saved-context-chars", String(savedChars));
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
 }
 
 function jsonError(message: string, status: number): Response {
