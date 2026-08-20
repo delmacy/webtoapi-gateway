@@ -161,7 +161,8 @@ assert(
 );
 console.log("B bootstrap: independent stateful full prompt");
 
-const finalA = await post(sessionA, continuationBody(initialA, callA, "deepseek-A-ok"));
+const continuationA = continuationBody(initialA, callA, "deepseek-A-ok");
+const finalA = await post(sessionA, continuationA);
 expectStateful(finalA.response, "append", "delta");
 expectFinal(finalA.json, "deepseek-A-ok");
 assert(
@@ -170,7 +171,8 @@ assert(
 );
 console.log("A continuation: append/delta preserved A state");
 
-const finalB = await post(sessionB, continuationBody(initialB, callB, "deepseek-B-ok"));
+const continuationB = continuationBody(initialB, callB, "deepseek-B-ok");
+const finalB = await post(sessionB, continuationB);
 expectStateful(finalB.response, "append", "delta");
 expectFinal(finalB.json, "deepseek-B-ok");
 assert(
@@ -192,7 +194,7 @@ console.log("A reset: divergence rehydrated A into epoch 2");
 const postResetB: ChatCompletionRequest = {
 	model,
 	messages: [
-		...initialB.messages,
+		...continuationB.messages,
 		{ role: "user", content: "Reply only with deepseek-B-still-isolated." },
 	],
 	tools: [TOOL],
