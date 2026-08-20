@@ -76,22 +76,14 @@ function parseAgentMode(value: string | undefined, fallback: AgentMode): AgentMo
 	return value === "passthrough" || value === "optimized" ? value : fallback;
 }
 
-/**
- * Ensure config file exists and contains all known fields.
- * - If the file is missing, create it with all defaults.
- * - If the file exists but is missing fields added in newer versions,
- *   back-fill them so users can discover and edit every option.
- */
 export function ensureConfigFile(): void {
 	try {
 		mkdirSync(dirname(CONFIG_FILE_PATH), { recursive: true });
-
 		if (!existsSync(CONFIG_FILE_PATH)) {
 			writeFileSync(CONFIG_FILE_PATH, `${JSON.stringify(DEFAULTS, null, 2)}\n`, "utf-8");
 			console.log(`Created default config: ${CONFIG_FILE_PATH}`);
 			return;
 		}
-
 		const raw = readFileSync(CONFIG_FILE_PATH, "utf-8");
 		const existing = JSON.parse(raw) as Record<string, unknown>;
 		let patched = false;
@@ -110,14 +102,6 @@ export function ensureConfigFile(): void {
 	}
 }
 
-/**
- * Load gateway configuration.
- *
- * Priority (highest to lowest):
- *   1. TFG_* environment variables
- *   2. <homedir>/.token-free-gateway/config.json
- *   3. Built-in defaults
- */
 export function loadConfig(): GatewayConfig {
 	const file = loadConfigFile();
 	const fileMode = file.agentMode ?? DEFAULTS.agentMode;
@@ -138,7 +122,8 @@ export function loadConfig(): GatewayConfig {
 			10,
 		),
 		agentMaxToolTurns: Number.parseInt(
-			process.env.TFG_AGENT_MAX_TOOL_TURNS ?? String(file.agentMaxToolTurns ?? DEFAULTS.agentMaxToolTurns),
+			process.env.TFG_AGENT_MAX_TOOL_TURNS ??
+				String(file.agentMaxToolTurns ?? DEFAULTS.agentMaxToolTurns),
 			10,
 		),
 		agentMaxIdenticalToolCalls: Number.parseInt(
