@@ -55,7 +55,11 @@ export class ClaudeStatefulWebClient extends ClaudeWebClient {
 				if (refreshed) {
 					this.statefulOrganizationId = undefined;
 					this.resetStatefulConversation();
-					return this.sendStatefulMessage({ ...params, resetSession: true });
+					return this.sendStatefulMessage({
+						...params,
+						message: params.rehydrationMessage ?? params.message,
+						resetSession: true,
+					});
 				}
 			}
 			throw err;
