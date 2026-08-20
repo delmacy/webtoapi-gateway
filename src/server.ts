@@ -137,8 +137,7 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 				},
 			},
 			{ status: 404 },
-		),
-		;
+		);
 	}
 
 	return handleChatCompletions(body, provider);
