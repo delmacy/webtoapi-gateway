@@ -213,6 +213,7 @@ export async function checkAllSessions(): Promise<
 						setTimeout(
 							() => resolve({ valid: false, reason: "session check timed out" }),
 							SESSION_CHECK_TIMEOUT_MS,
+						),
 					),
 				]);
 				results[id] = await race;
