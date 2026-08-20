@@ -55,6 +55,17 @@ describe("GW_AGENT_PROTOCOL/1 envelope", () => {
 		expect(parsed).toEqual({ type: "message", content: "done" });
 	});
 
+	test("preserves optional reasoning metadata on message envelopes", () => {
+		const parsed = parseGatewayEnvelope(
+			envelope({ type: "message", content: "done", reasoning_content: "checked evidence" }),
+		);
+		expect(parsed).toEqual({
+			type: "message",
+			content: "done",
+			reasoning_content: "checked evidence",
+		});
+	});
+
 	test("allows only surrounding whitespace outside the envelope", () => {
 		const text = `  \n${envelope({ type: "message", content: "ok" })}\n  `;
 		expect(JSON.parse(extractGatewayJson(text))).toEqual({ type: "message", content: "ok" });
@@ -80,6 +91,20 @@ describe("GW_AGENT_PROTOCOL/1 envelope", () => {
 		const text = `${GW_JSON_START}\n{"type":"tool_call","calls":[}\n${GW_JSON_END}`;
 		expectProtocolError(() => parseGatewayEnvelope(text), "invalid_json");
 	});
+
+	test("rejects non-string optional response metadata", () => {
+		expectProtocolError(
+			() =>
+				parseGatewayEnvelope(
+					envelope({
+						type: "tool_call",
+						calls: [{ name: "exec", arguments: { command: "pwd" } }],
+						reasoning_content: { invalid: true },
+					}),
+				),
+			"invalid_envelope",
+		);
+	});
 });
 
 describe("canonical tool calls", () => {
@@ -98,6 +123,20 @@ describe("canonical tool calls", () => {
 			command: "ls",
 			timeout: 30,
 		});
+	});
+
+	test("preserves progress content and reasoning alongside tool calls", () => {
+		const text = envelope({
+			type: "tool_call",
+			content: "Vou verificar os arquivos.",
+			reasoning_content: "Need evidence before concluding.",
+			calls: [{ name: "exec", arguments: { command: "pwd" } }],
+		});
+		const result = parseCanonicalToolResponse(text, [EXEC_TOOL]);
+		expect(result.content).toBe("Vou verificar os arquivos.");
+		expect(result.reasoningContent).toBe("Need evidence before concluding.");
+		expect(result.finishReason).toBe("tool_calls");
+		expect(result.toolCalls).toHaveLength(1);
 	});
 
 	test("supports multiple validated tool calls", () => {
@@ -156,7 +195,12 @@ describe("canonical tool calls", () => {
 		const result = parseCanonicalToolResponse(envelope({ type: "message", content: "finished" }), [
 			EXEC_TOOL,
 		]);
-		expect(result).toEqual({ content: "finished", toolCalls: undefined, finishReason: "stop" });
+		expect(result).toEqual({
+			content: "finished",
+			reasoningContent: undefined,
+			toolCalls: undefined,
+			finishReason: "stop",
+		});
 	});
 });
 
