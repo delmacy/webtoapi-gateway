@@ -5,7 +5,11 @@ import {
 	setRouteTimeoutSec,
 } from "../src/openai/chat-completions.ts";
 import type { ChatCompletionRequest } from "../src/openai/types.ts";
-import type { ProviderSendParams, StreamResult, WebProviderClient } from "../src/providers/types.ts";
+import type {
+	ProviderSendParams,
+	StreamResult,
+	WebProviderClient,
+} from "../src/providers/types.ts";
 
 const RUNTIME_CONFIG = {
 	mode: "optimized" as const,
