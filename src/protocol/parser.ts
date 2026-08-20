@@ -10,12 +10,25 @@ import {
 
 export interface CanonicalToolResponse {
 	content: string | null;
+	reasoningContent?: string;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(
+	record: Record<string, unknown>,
+	field: "content" | "reasoning_content",
+): string | undefined {
+	const value = record[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") {
+		throw new GatewayProtocolError("invalid_envelope", `${field} must be a string when present.`);
+	}
+	return value;
 }
 
 function countOccurrences(text: string, needle: string): number {
@@ -105,11 +118,17 @@ export function parseGatewayEnvelope(text: string): GatewayEnvelope {
 	}
 
 	switch (decoded.type) {
-		case "message":
+		case "message": {
 			if (typeof decoded.content !== "string") {
 				throw new GatewayProtocolError("invalid_envelope", "message.content must be a string.");
 			}
-			return { type: "message", content: decoded.content };
+			const reasoningContent = optionalString(decoded, "reasoning_content");
+			return {
+				type: "message",
+				content: decoded.content,
+				...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
+			};
+		}
 
 		case "tool_call": {
 			if (!Array.isArray(decoded.calls) || decoded.calls.length === 0) {
@@ -118,7 +137,14 @@ export function parseGatewayEnvelope(text: string): GatewayEnvelope {
 					"tool_call.calls must be a non-empty array.",
 				);
 			}
-			return { type: "tool_call", calls: decoded.calls.map(parseToolCall) };
+			const content = optionalString(decoded, "content");
+			const reasoningContent = optionalString(decoded, "reasoning_content");
+			return {
+				type: "tool_call",
+				calls: decoded.calls.map(parseToolCall),
+				...(content === undefined ? {} : { content }),
+				...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
+			};
 		}
 
 		case "error":
@@ -144,7 +170,12 @@ export function parseCanonicalToolResponse(
 ): CanonicalToolResponse {
 	const envelope = parseGatewayEnvelope(text);
 	if (envelope.type === "message") {
-		return { content: envelope.content, toolCalls: undefined, finishReason: "stop" };
+		return {
+			content: envelope.content,
+			reasoningContent: envelope.reasoning_content,
+			toolCalls: undefined,
+			finishReason: "stop",
+		};
 	}
 	if (envelope.type === "error") {
 		throw new GatewayProtocolError("model_protocol_error", envelope.message);
@@ -181,5 +212,10 @@ export function parseCanonicalToolResponse(
 		};
 	});
 
-	return { content: null, toolCalls, finishReason: "tool_calls" };
+	return {
+		content: envelope.content ?? null,
+		reasoningContent: envelope.reasoning_content,
+		toolCalls,
+		finishReason: "tool_calls",
+	};
 }
