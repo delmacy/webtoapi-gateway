@@ -32,12 +32,10 @@ class RuntimeProfileStore {
 	update(providerId: string, patch: Partial<ProviderRuntimeProfile>): ProviderRuntimeProfile {
 		const previous = this.profiles.get(providerId);
 		const next: ProviderRuntimeProfile = {
-			providerId,
-			lastObservedAt: Date.now(),
-			source: patch.source ?? previous?.source ?? "fallback",
 			...previous,
 			...patch,
 			providerId,
+			source: patch.source ?? previous?.source ?? "fallback",
 			lastObservedAt: Date.now(),
 		};
 		this.profiles.set(providerId, next);
