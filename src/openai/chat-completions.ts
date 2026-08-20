@@ -40,6 +40,7 @@ type ExecutionContext = {
 	requestFingerprint: string;
 	plan: ProviderPromptPlan;
 	cacheEnabled: boolean;
+	signal?: AbortSignal;
 };
 
 type AgentHeaderContext = {
@@ -119,6 +120,7 @@ function providerSendParams(
 	return {
 		message: prompt,
 		model,
+		signal: execution.signal,
 		statefulSession: execution.plan.statefulSession,
 		sessionId: execution.plan.statefulSession ? execution.sessionId : undefined,
 		sessionEpoch: execution.plan.statefulSession ? execution.sessionEpoch : undefined,
@@ -221,18 +223,24 @@ export async function handleChatCompletions(
 		_agentMode === "optimized"
 			? await fairUseGovernor.acquire(client.providerId, _fairUsePolicy)
 			: () => {};
+	const routeAbort = new AbortController();
+	execution.signal = routeAbort.signal;
 	const handler = body.stream
 		? handleStreaming(id, model, plan.prompt, plan.hasTools, body, client, execution, release)
 		: handleNonStreaming(id, model, plan.prompt, plan.hasTools, body, client, execution, release);
 
-	const timeout = new Promise<Response>((resolve) =>
-		setTimeout(() => {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<Response>((resolve) => {
+		timeoutId = setTimeout(() => {
+			const message = `Gateway timeout: upstream provider did not respond in time`;
 			console.error(`[chat-completions] Request timed out after ${_routeTimeoutMs / 1000}s`);
-			resolve(jsonError("Gateway timeout: upstream provider did not respond in time", 504));
-		}, _routeTimeoutMs),
-	);
+			routeAbort.abort(new Error(message));
+			resolve(jsonError(message, 504));
+		}, _routeTimeoutMs);
+	});
 
 	const response = await Promise.race([handler, timeout]);
+	if (timeoutId) clearTimeout(timeoutId);
 	return withAgentHeaders(response, headers);
 }
 
