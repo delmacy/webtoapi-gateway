@@ -30,7 +30,31 @@ describe("AgentResponseCache", () => {
 		expect(a).not.toBe(c);
 	});
 
-	test("cached tool call ids survive retries unchanged", () => {
+	test("fingerprint includes reasoning metadata and reasoning controls", () => {
+		const base = body("ls");
+		const withReasoning: ChatCompletionRequest = {
+			...body("ls"),
+			messages: [
+				{ role: "user", content: "Run ls" },
+				{ role: "assistant", content: "checking", reasoning_content: "need evidence" },
+			],
+		};
+		const withDifferentReasoning: ChatCompletionRequest = {
+			...withReasoning,
+			messages: [
+				{ role: "user", content: "Run ls" },
+				{ role: "assistant", content: "checking", reasoning_content: "different evidence" },
+			],
+		};
+		const low = { ...base, reasoning_effort: "low" };
+		const high = { ...base, reasoning_effort: "high" };
+		expect(fingerprintChatRequest(withReasoning)).not.toBe(
+			fingerprintChatRequest(withDifferentReasoning),
+		);
+		expect(fingerprintChatRequest(low)).not.toBe(fingerprintChatRequest(high));
+	});
+
+	test("cached tool call ids and reasoning survive retries unchanged", () => {
 		const cache = new AgentResponseCache(8, 10_000);
 		const fingerprint = fingerprintChatRequest(body());
 		cache.set(
@@ -38,7 +62,8 @@ describe("AgentResponseCache", () => {
 			"explicit:task-1",
 			fingerprint,
 			{
-				content: null,
+				content: "Checking files.",
+				reasoningContent: "Need directory evidence.",
 				toolCalls: [
 					{
 						id: "call_gw_stable123",
@@ -56,6 +81,7 @@ describe("AgentResponseCache", () => {
 		const second = cache.get("deepseek-web", "explicit:task-1", fingerprint, 300);
 		expect(first?.toolCalls?.[0]?.id).toBe("call_gw_stable123");
 		expect(second?.toolCalls?.[0]?.id).toBe("call_gw_stable123");
+		expect(second?.reasoningContent).toBe("Need directory evidence.");
 
 		if (first?.toolCalls?.[0]) first.toolCalls[0].function.arguments = "mutated";
 		expect(second?.toolCalls?.[0]?.function.arguments).toBe('{"command":"ls"}');
