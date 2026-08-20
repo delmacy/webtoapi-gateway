@@ -23,7 +23,8 @@ function renderSchemaType(schema: JsonSchema, depth = 0): string {
 
 	const type = typeof schema.type === "string" ? schema.type : "any";
 	if (type === "array") {
-		const items = schema.items && typeof schema.items === "object" ? (schema.items as JsonSchema) : {};
+		const items =
+			schema.items && typeof schema.items === "object" ? (schema.items as JsonSchema) : {};
 		return `array<${renderSchemaType(items, depth + 1)}>`;
 	}
 	if (type === "object") {
@@ -33,7 +34,8 @@ function renderSchemaType(schema: JsonSchema, depth = 0): string {
 				: {};
 		const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
 		const fields = Object.entries(properties).map(
-			([name, child]) => `${name}${required.has(name) ? "!" : "?"}:${renderSchemaType(child, depth + 1)}`,
+			([name, child]) =>
+				`${name}${required.has(name) ? "!" : "?"}:${renderSchemaType(child, depth + 1)}`,
 		);
 		return fields.length > 0 ? `{${fields.join(",")}}` : "object";
 	}
