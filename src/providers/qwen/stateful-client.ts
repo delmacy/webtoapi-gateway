@@ -81,7 +81,7 @@ export class QwenStatefulWebClient extends QwenWebClient {
 		this.parentId = undefined;
 	}
 
-	private getRuntimeTarget(chatId?: string): {
+	private getStatefulRuntimeTarget(chatId?: string): {
 		origin: string;
 		completionEndpoint?: string;
 		version: string;
@@ -107,7 +107,7 @@ export class QwenStatefulWebClient extends QwenWebClient {
 
 	private async createChat(page: Page, model: string): Promise<string | QwenStatefulResult> {
 		if (this.chatId) return this.chatId;
-		const runtime = this.getRuntimeTarget();
+		const runtime = this.getStatefulRuntimeTarget();
 		const requestId = crypto.randomUUID();
 		const createEval = page.evaluate(
 			async ({ baseUrl, timeoutMs, model: selectedModel, requestId: reqId, version }) => {
@@ -186,7 +186,7 @@ export class QwenStatefulWebClient extends QwenWebClient {
 		const chat = await this.createChat(page, model);
 		if (typeof chat !== "string") return chat;
 
-		const runtime = this.getRuntimeTarget(chat);
+		const runtime = this.getStatefulRuntimeTarget(chat);
 		const parentId = this.parentId ?? null;
 		const fid = crypto.randomUUID();
 		const childId = crypto.randomUUID();
