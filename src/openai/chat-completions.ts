@@ -338,9 +338,7 @@ function emitToolCallDeltas(w: SseWriter, id: string, model: string, toolCalls: 
 		w.writeChunk(id, model, [{ index: 0, delta: { tool_calls: [tcStart] }, finish_reason: null }]);
 		for (const fragment of splitArgumentFragments(tc.function.arguments)) {
 			const tcArgs: ToolCallDelta = { index: i, function: { arguments: fragment } };
-			w.writeChunk(id, model, [
-				{ index: 0, delta: { tool_calls: [tcArgs] }, finish_reason: null },
-			]);
+			w.writeChunk(id, model, [{ index: 0, delta: { tool_calls: [tcArgs] }, finish_reason: null }]);
 		}
 	}
 }
