@@ -5,7 +5,12 @@
 
 import { getCredentials } from "./auth-store.ts";
 import { SessionScopedProviderClient } from "./session-scoped-client.ts";
-import type { ModelInfo, ProviderDefinition, ProviderSessionCapabilities, WebProviderClient } from "./types.ts";
+import type {
+	ModelInfo,
+	ProviderDefinition,
+	ProviderSessionCapabilities,
+	WebProviderClient,
+} from "./types.ts";
 
 // Lazy-loaded provider definitions to avoid importing all providers at startup
 let _definitions: ProviderDefinition[] | null = null;
