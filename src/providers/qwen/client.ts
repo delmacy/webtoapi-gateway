@@ -15,7 +15,28 @@ const QWEN_CREATE_TIMEOUT_MS = 30_000;
 const QWEN_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const QWEN_EVALUATE_TIMEOUT_MS = 60_000;
 
-function timeoutResult(stage: string, timeoutMs: number): Promise<EvalResult> {
+type QwenErrorResult = {
+	ok: false;
+	status: number;
+	error: string;
+	stage?: string;
+};
+
+type QwenCreateSuccess = {
+	ok: true;
+	chatId: string;
+};
+
+type QwenCompletionSuccess = {
+	ok: true;
+	data: string;
+	meta?: { status: number; contentType: string; bytes: number; firstByte: boolean };
+};
+
+type QwenCreateResult = QwenCreateSuccess | QwenErrorResult;
+type QwenCompletionResult = QwenCompletionSuccess | QwenErrorResult;
+
+function timeoutResult(stage: string, timeoutMs: number): Promise<QwenErrorResult> {
 	return new Promise((resolve) => {
 		setTimeout(
 			() =>
@@ -23,6 +44,7 @@ function timeoutResult(stage: string, timeoutMs: number): Promise<EvalResult> {
 					ok: false,
 					status: 408,
 					error: `Qwen ${stage} timed out after ${timeoutMs}ms`,
+					stage,
 				}),
 			timeoutMs,
 		);
@@ -138,17 +160,13 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		const createChatResult = (await Promise.race([
 			createEval,
 			timeoutResult("create-chat browser evaluation", QWEN_EVALUATE_TIMEOUT_MS),
-		])) as EvalResult & { chatId?: string };
+		])) as QwenCreateResult;
 
-		if (!createChatResult.ok || !createChatResult.chatId) {
+		if (!createChatResult.ok) {
 			console.warn(
-				`[QwenWeb] stage=create-chat:error status=${createChatResult.status ?? 500} error=${createChatResult.error ?? "unknown"}`,
+				`[QwenWeb] stage=create-chat:error status=${createChatResult.status} error=${createChatResult.error}`,
 			);
-			return {
-				ok: false,
-				status: createChatResult.status ?? 500,
-				error: createChatResult.error || "No chat_id in response",
-			};
+			return createChatResult;
 		}
 
 		const chatId = createChatResult.chatId;
@@ -308,22 +326,21 @@ export class QwenWebClient extends BaseApiClient<QwenWebAuth> {
 		const responseData = (await Promise.race([
 			completionEval,
 			timeoutResult("completion browser evaluation", QWEN_EVALUATE_TIMEOUT_MS),
-		])) as EvalResult & {
-			meta?: { status: number; contentType: string; bytes: number; firstByte: boolean };
-			stage?: string;
-		};
+		])) as QwenCompletionResult;
 
-		if (responseData.ok && responseData.meta) {
-			console.log(
-				`[QwenWeb] stage=completion:ok status=${responseData.meta.status} contentType=${responseData.meta.contentType || "unknown"} bytes=${responseData.meta.bytes} firstByte=${responseData.meta.firstByte}`,
-			);
-		} else {
-			console.warn(
-				`[QwenWeb] stage=${responseData.stage ?? "completion"}:error status=${responseData.status ?? 500} error=${responseData.error ?? "unknown"}`,
-			);
+		if (responseData.ok) {
+			if (responseData.meta) {
+				console.log(
+					`[QwenWeb] stage=completion:ok status=${responseData.meta.status} contentType=${responseData.meta.contentType || "unknown"} bytes=${responseData.meta.bytes} firstByte=${responseData.meta.firstByte}`,
+				);
+			}
+			return { ok: true, data: responseData.data };
 		}
 
-		return responseData as EvalResult;
+		console.warn(
+			`[QwenWeb] stage=${responseData.stage ?? "completion"}:error status=${responseData.status} error=${responseData.error}`,
+		);
+		return responseData;
 	}
 
 	protected parseStreamImpl(
