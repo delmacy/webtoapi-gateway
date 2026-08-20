@@ -2,21 +2,23 @@ import type { Page } from "playwright-core";
 import { BrowserManager } from "../../browser/manager.ts";
 import { BaseApiClient } from "../factory/base-api-client.ts";
 import type { ApiClientConfig, NormalizedSendParams } from "../factory/types.ts";
+import { runtimeProfiles } from "../runtime-profile.ts";
 import { type BrowserCookie, parseCookieHeader } from "../shared/cookie-parser.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import type { StreamResult } from "../types.ts";
 import type { KimiWebAuth } from "./auth.ts";
 import { parseKimiStream } from "./stream.ts";
 
-const KIMI_CHAT_BASE_URL = "https://www.kimi.com";
+const KIMI_FALLBACK_ORIGIN = "https://www.kimi.ai";
+const KIMI_CHAT_PATH = "/apiv2/kimi.gateway.chat.v1.ChatService/Chat";
 
 export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 	readonly providerId = "kimi-web";
 
 	protected readonly config: ApiClientConfig = {
-		hostKey: "kimi.com",
-		startUrl: "https://www.kimi.com/",
-		cookieDomain: ".kimi.com",
+		hostKey: "kimi.ai",
+		startUrl: `${KIMI_FALLBACK_ORIGIN}/`,
+		cookieDomain: ".kimi.ai",
 		defaultModel: "moonshot-v1-32k",
 		models: [
 			{ id: "moonshot-v1-8k", name: "Moonshot v1 8K" },
@@ -25,47 +27,63 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		],
 	};
 
-	private readonly baseUrl = KIMI_CHAT_BASE_URL;
-
 	protected getCookies(): BrowserCookie[] {
 		return [];
 	}
 
-	/**
-	 * Authentication may be captured from kimi.ai, but the international chat
-	 * transport is served by www.kimi.com.
-	 */
+	private getRuntimeTarget(): { origin: string; endpoint: string } {
+		const profile = runtimeProfiles.get(this.providerId);
+		const origin = profile?.origin?.startsWith("https://")
+			? profile.origin
+			: this.auth.siteUrl?.startsWith("https://")
+				? this.auth.siteUrl
+				: KIMI_FALLBACK_ORIGIN;
+		const endpoint =
+			profile?.endpoint?.includes("kimi.gateway.chat.v1.ChatService/Chat")
+				? profile.endpoint
+				: `${origin}${KIMI_CHAT_PATH}`;
+		return { origin, endpoint };
+	}
+
 	protected override async getPage(): Promise<Page> {
+		const { origin } = this.getRuntimeTarget();
 		if (this.page) {
 			try {
-				await this.page.evaluate(() => document.readyState);
-				return this.page;
+				const current = new URL(this.page.url());
+				if (current.origin === origin) {
+					await this.page.evaluate(() => document.readyState);
+					return this.page;
+				}
 			} catch {
-				this.page = null;
+				// Re-resolve the page below.
 			}
+			this.page = null;
 		}
 
 		const bm = BrowserManager.getInstance();
-		this.page = await bm.getPage(this.config.hostKey, this.config.startUrl);
+		this.page = await bm.getPage(new URL(origin).hostname, `${origin}/`);
 
 		const cookie = this.auth.cookie || "";
 		if (cookie.trim()) {
-			const cookies = parseCookieHeader(cookie, ".kimi.com").map((c) => ({
-				...c,
-				...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-") ? { secure: true } : {}),
-			}));
+			const cookies = parseCookieHeader(cookie, `.${new URL(origin).hostname.replace(/^www\./, "")}`).map(
+				(c) => ({
+					...c,
+					...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-")
+						? { secure: true }
+						: {}),
+				}),
+			);
 			if (cookies.length > 0) await bm.addCookies(cookies);
 		}
 		return this.page;
 	}
 
 	protected async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
+		const { origin, endpoint } = this.getRuntimeTarget();
 		const bm = BrowserManager.getInstance();
 		const ctx = await bm.getContext();
-		const cookies = await ctx.cookies([this.baseUrl]);
+		const cookies = await ctx.cookies([origin]);
 
-		// Prefer live browser credentials. Kimi rotates authentication and a token
-		// saved by webauth can become stale while the browser session is still valid.
 		const kimiAuthCookie = cookies.find((c) => c.name === "kimi-auth" && c.value)?.value;
 		const accessTokenCookie = cookies.find((c) => c.name === "access_token" && c.value)?.value;
 		const authCandidates = [kimiAuthCookie, accessTokenCookie, this.auth.accessToken]
@@ -87,12 +105,14 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		for (const authToken of authCandidates) {
 			const result = await page.evaluate(
 				async ({
-					baseUrl,
+					origin,
+					endpoint,
 					message,
 					kimiAuthToken,
 					scenario,
 				}: {
-					baseUrl: string;
+					origin: string;
+					endpoint: string;
 					message: string;
 					kimiAuthToken: string;
 					scenario: string;
@@ -113,15 +133,14 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					dv.setUint32(1, enc.byteLength, false);
 					new Uint8Array(buf, 5).set(enc);
 
-					const endpoint = `${baseUrl}/apiv2/kimi.gateway.chat.v1.ChatService/Chat`;
 					const res = await fetch(endpoint, {
 						method: "POST",
 						headers: {
 							"Content-Type": "application/connect+json",
 							"Connect-Protocol-Version": "1",
 							Accept: "*/*",
-							Origin: baseUrl,
-							Referer: `${baseUrl}/`,
+							Origin: origin,
+							Referer: `${origin}/`,
 							"X-Language": "en-US",
 							"X-Msh-Platform": "web",
 							Authorization: `Bearer ${kimiAuthToken}`,
@@ -193,7 +212,8 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					return { ok: true as const, text: texts.join("") };
 				},
 				{
-					baseUrl: this.baseUrl,
+					origin,
+					endpoint,
 					message: params.message,
 					kimiAuthToken: authToken,
 					scenario: model.includes("search")
@@ -211,10 +231,8 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 				return { ok: true, data: `data: {"text":${escaped}}\n\ndata: [DONE]\n\n` };
 			}
 
-			// Only try another credential when this candidate is explicitly rejected.
-			// Other failures (protocol/parser/server errors) should surface immediately.
 			if (("status" in result ? result.status : 0) !== 401) {
-				console.error(`[Kimi Web] ${this.baseUrl}: ${"error" in result ? result.error : "Unknown error"}`);
+				console.error(`[Kimi Web] ${endpoint}: ${"error" in result ? result.error : "Unknown error"}`);
 				return {
 					ok: false,
 					status: ("status" in result ? result.status : 502) as number,
@@ -229,7 +247,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 			};
 		}
 
-		console.error(`[Kimi Web] all available credentials were rejected by ${this.baseUrl}`);
+		console.error(`[Kimi Web] all available credentials were rejected by ${endpoint}`);
 		return (
 			lastAuthError ?? {
 				ok: false,
