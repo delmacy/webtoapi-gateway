@@ -4,6 +4,7 @@ import { QwenWebClient } from "../src/providers/qwen/client.ts";
 const credentials = {
 	sessionToken: "test-session",
 	cookie: "qwen_session=test-session",
+	userAgent: "test-user-agent",
 };
 
 describe("QwenWebClient stateful shape", () => {
