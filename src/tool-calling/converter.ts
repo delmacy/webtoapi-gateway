@@ -62,10 +62,18 @@ function formatAssistantMsg(msg: AssistantMessage, canonical: boolean): string |
 				name: tc.function.name,
 				arguments: historicalArguments(tc.function.arguments),
 			}));
+			const envelope = {
+				type: "tool_call" as const,
+				calls,
+				...(typeof msg.content === "string" ? { content: msg.content } : {}),
+				...(typeof msg.reasoning_content === "string"
+					? { reasoning_content: msg.reasoning_content }
+					: {}),
+			};
 			return [
 				"Assistant protocol action:",
 				GW_JSON_START,
-				JSON.stringify({ type: "tool_call", calls }),
+				JSON.stringify(envelope),
 				GW_JSON_END,
 			].join("\n");
 		}
@@ -76,6 +84,23 @@ function formatAssistantMsg(msg: AssistantMessage, canonical: boolean): string |
 		);
 		return `Assistant: [Called tools]\n${calls.join("\n")}`;
 	}
+
+	if (canonical && (typeof msg.content === "string" || typeof msg.reasoning_content === "string")) {
+		const envelope = {
+			type: "message" as const,
+			content: typeof msg.content === "string" ? msg.content : "",
+			...(typeof msg.reasoning_content === "string"
+				? { reasoning_content: msg.reasoning_content }
+				: {}),
+		};
+		return [
+			"Assistant protocol message:",
+			GW_JSON_START,
+			JSON.stringify(envelope),
+			GW_JSON_END,
+		].join("\n");
+	}
+
 	return msg.content ? `Assistant: ${msg.content}` : null;
 }
 
@@ -188,13 +213,19 @@ export function parseToolResponse(
 	strictProtocol = false,
 ): {
 	content: string | null;
+	reasoningContent?: string;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 } {
 	if (strictProtocol) return parseCanonicalToolResponse(text, requestedTools);
 
 	if (!requestedTools || requestedTools.length === 0 || !hasToolCall(text)) {
-		return { content: text, toolCalls: undefined, finishReason: "stop" };
+		return {
+			content: text,
+			reasoningContent: undefined,
+			toolCalls: undefined,
+			finishReason: "stop",
+		};
 	}
 
 	const validToolNames = new Set(requestedTools.map((t) => t.function.name));
@@ -202,7 +233,12 @@ export function parseToolResponse(
 	const validCalls = parsed.filter((c) => validToolNames.has(c.name));
 
 	if (validCalls.length === 0) {
-		return { content: text, toolCalls: undefined, finishReason: "stop" };
+		return {
+			content: text,
+			reasoningContent: undefined,
+			toolCalls: undefined,
+			finishReason: "stop",
+		};
 	}
 
 	const toolCalls: ToolCallOutput[] = validCalls.map((call) => ({
@@ -214,5 +250,10 @@ export function parseToolResponse(
 		},
 	}));
 
-	return { content: null, toolCalls, finishReason: "tool_calls" };
+	return {
+		content: null,
+		reasoningContent: undefined,
+		toolCalls,
+		finishReason: "tool_calls",
+	};
 }
