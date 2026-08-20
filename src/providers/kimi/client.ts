@@ -8,11 +8,23 @@ import type { StreamResult } from "../types.ts";
 import type { KimiWebAuth } from "./auth.ts";
 import { parseKimiStream } from "./stream.ts";
 
+function normalizeSiteUrl(siteUrl?: string): string {
+	try {
+		const url = new URL(siteUrl || "https://www.kimi.com/");
+		if (url.hostname.endsWith("kimi.ai") || url.hostname.endsWith("kimi.com")) {
+			return url.origin;
+		}
+	} catch {
+		/* fall through */
+	}
+	return "https://www.kimi.com";
+}
+
 export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 	readonly providerId = "kimi-web";
 
 	protected readonly config: ApiClientConfig = {
-		hostKey: "kimi.com",
+		hostKey: "kimi",
 		startUrl: "https://www.kimi.com/",
 		cookieDomain: ".kimi.com",
 		defaultModel: "moonshot-v1-32k",
@@ -23,13 +35,20 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		],
 	};
 
-	private readonly baseUrl = "https://www.kimi.com";
+	private readonly baseUrl: string;
+	private readonly cookieDomain: string;
+
+	constructor(auth: KimiWebAuth) {
+		super(auth);
+		this.baseUrl = normalizeSiteUrl(auth.siteUrl);
+		this.cookieDomain = new URL(this.baseUrl).hostname.endsWith("kimi.ai") ? ".kimi.ai" : ".kimi.com";
+	}
 
 	protected getCookies(): BrowserCookie[] {
 		return [];
 	}
 
-	/** Custom page init: dynamic domain for cookies + secure flag for __Secure-/__Host- prefixed cookies. */
+	/** Reuse the authenticated Kimi variant and keep cookies scoped to that site. */
 	protected override async getPage(): Promise<Page> {
 		if (this.page) {
 			try {
@@ -39,13 +58,14 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 				this.page = null;
 			}
 		}
+
 		const bm = BrowserManager.getInstance();
-		this.page = await bm.getPage(this.config.hostKey, this.config.startUrl);
+		const hostKey = new URL(this.baseUrl).hostname;
+		this.page = await bm.getPage(hostKey, `${this.baseUrl}/`);
+
 		const cookie = this.auth.cookie || "";
 		if (cookie.trim()) {
-			const pageUrl = this.page.url() ?? this.baseUrl;
-			const domain = pageUrl.includes("moonshot.cn") ? ".moonshot.cn" : ".kimi.com";
-			const cookies = parseCookieHeader(cookie, domain).map((c) => ({
+			const cookies = parseCookieHeader(cookie, this.cookieDomain).map((c) => ({
 				...c,
 				...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-") ? { secure: true } : {}),
 			}));
@@ -58,14 +78,13 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		const bm = BrowserManager.getInstance();
 		const ctx = await bm.getContext();
 		const cookies = await ctx.cookies([this.baseUrl]);
-		const kimiAuthCookie = cookies.find((c) => c.name === "kimi-auth")?.value;
+		const kimiAuthCookie = cookies.find((c) => c.name === "kimi-auth" || c.name === "access_token")?.value;
 		const authToken = this.auth.accessToken || kimiAuthCookie;
 		if (!authToken) {
 			return {
 				ok: false,
 				status: 401,
-				error:
-					"Kimi: no credentials (accessToken or kimi-auth cookie). Run webauth to refresh login.",
+				error: `Kimi: no credentials for ${this.baseUrl}. Run webauth to refresh login.`,
 			};
 		}
 
@@ -98,7 +117,8 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 				dv.setUint32(1, enc.byteLength, false);
 				new Uint8Array(buf, 5).set(enc);
 
-				const res = await fetch(`${baseUrl}/apiv2/kimi.gateway.chat.v1.ChatService/Chat`, {
+				const endpoint = `${baseUrl}/apiv2/kimi.gateway.chat.v1.ChatService/Chat`;
+				const res = await fetch(endpoint, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/connect+json",
@@ -106,7 +126,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 						Accept: "*/*",
 						Origin: baseUrl,
 						Referer: `${baseUrl}/`,
-						"X-Language": "zh-CN",
+						"X-Language": "en-US",
 						"X-Msh-Platform": "web",
 						Authorization: `Bearer ${kimiAuthToken}`,
 					},
@@ -114,8 +134,13 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 				});
 				if (!res.ok) {
 					const text = await res.text();
-					return { ok: false as const, status: res.status, error: text.slice(0, 400) };
+					return {
+						ok: false as const,
+						status: res.status,
+						error: `Kimi ${endpoint} returned HTTP ${res.status}: ${text.slice(0, 600)}`,
+					};
 				}
+
 				const arr = await res.arrayBuffer();
 				const u8 = new Uint8Array(arr);
 				const texts: string[] = [];
@@ -126,17 +151,19 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					const chunk = u8.slice(o + 5, o + 5 + len);
 					try {
 						const obj = JSON.parse(new TextDecoder().decode(chunk));
-						if (obj.error)
+						if (obj.error) {
 							return {
 								ok: false as const,
-								error:
-									obj.error.message || obj.error.code || JSON.stringify(obj.error).slice(0, 200),
+								status: 502,
+								error: obj.error.message || obj.error.code || JSON.stringify(obj.error).slice(0, 400),
 							};
+						}
 						const op = obj.op || "";
-						if (obj.block?.text?.content && (op === "append" || op === "set"))
+						if (obj.block?.text?.content && (op === "append" || op === "set")) {
 							texts.push(obj.block.text.content);
-						else if (obj.text?.content && (op === "append" || op === "set"))
+						} else if (obj.text?.content && (op === "append" || op === "set")) {
 							texts.push(obj.text.content);
+						}
 						if (!op && obj.message?.role === "assistant" && obj.message?.blocks) {
 							for (const blk of obj.message.blocks) {
 								if (blk.text?.content) texts.push(blk.text.content);
@@ -144,9 +171,17 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 						}
 						if (obj.done) break;
 					} catch {
-						/* ignore */
+						/* ignore non-JSON control frames */
 					}
 					o += 5 + len;
+				}
+
+				if (texts.length === 0) {
+					return {
+						ok: false as const,
+						status: 502,
+						error: `Kimi returned ${u8.length} bytes but no assistant text was decoded`,
+					};
 				}
 				return { ok: true as const, text: texts.join("") };
 			},
@@ -165,9 +200,10 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		);
 
 		if (!result.ok) {
+			console.error(`[Kimi Web] ${this.baseUrl}: ${"error" in result ? result.error : "Unknown error"}`);
 			return {
 				ok: false,
-				status: ("status" in result ? result.status : 0) as number,
+				status: ("status" in result ? result.status : 502) as number,
 				error: ("error" in result ? result.error : "Unknown error") as string,
 			};
 		}
