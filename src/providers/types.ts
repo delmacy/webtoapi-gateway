@@ -8,6 +8,31 @@ export interface StreamResult {
 	thinkingText: string;
 }
 
+export interface ProviderSessionCapabilities {
+	/** Provider exposes an upstream conversation/thread identifier that can be reused. */
+	persistentConversation: boolean;
+	/** Gateway may send only the newly appended semantic turn instead of the full transcript. */
+	deltaPrompts: boolean;
+	/** Provider can safely discard its upstream thread and start a fresh one on history divergence. */
+	resettable: boolean;
+}
+
+export interface ProviderSendParams {
+	message: string;
+	model?: string;
+	signal?: AbortSignal;
+	/** Stable logical task/session id. Required when statefulSession is true. */
+	sessionId?: string;
+	/** Canonical history epoch. A change requires a fresh upstream thread. */
+	sessionEpoch?: number;
+	/** Explicitly discard any existing upstream state before this request. */
+	resetSession?: boolean;
+	/** Whether this request is allowed to reuse upstream conversation state. */
+	statefulSession?: boolean;
+	/** Full canonical prompt used when a provider-specific fallback cannot safely consume a delta. */
+	rehydrationMessage?: string;
+}
+
 export class SessionExpiredError extends Error {
 	constructor(
 		public readonly providerId: string,
@@ -37,14 +62,9 @@ export class ProviderApiError extends Error {
 
 export interface WebProviderClient {
 	readonly providerId: string;
+	readonly sessionCapabilities?: ProviderSessionCapabilities;
 	init(): Promise<void>;
-	sendMessage(params: {
-		message: string;
-		model?: string;
-		signal?: AbortSignal;
-		/** Stable logical task/session id. Providers may use it for upstream conversation affinity. */
-		sessionId?: string;
-	}): Promise<ReadableStream<Uint8Array>>;
+	sendMessage(params: ProviderSendParams): Promise<ReadableStream<Uint8Array>>;
 	parseStream(
 		body: ReadableStream<Uint8Array>,
 		onDelta?: (delta: string) => void,
