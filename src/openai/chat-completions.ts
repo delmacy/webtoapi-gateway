@@ -206,11 +206,7 @@ async function handleStreaming(
 	if (hasTools) {
 		try {
 			const result = await client.parseStream(providerStream);
-			bufferedToolResponse = parseToolResponse(
-				result.text,
-				body.tools,
-				_agentMode === "optimized",
-			);
+			bufferedToolResponse = parseToolResponse(result.text, body.tools, _agentMode === "optimized");
 		} catch (err) {
 			release();
 			return providerErrorResponse(err, "streaming (tool protocol)");
@@ -264,7 +260,9 @@ function emitBufferedToolResponse(
 		return;
 	}
 	if (response.content) {
-		w.writeChunk(id, model, [{ index: 0, delta: { content: response.content }, finish_reason: null }]);
+		w.writeChunk(id, model, [
+			{ index: 0, delta: { content: response.content }, finish_reason: null },
+		]);
 	}
 	w.writeChunk(id, model, [{ index: 0, delta: {}, finish_reason: "stop" }]);
 }
