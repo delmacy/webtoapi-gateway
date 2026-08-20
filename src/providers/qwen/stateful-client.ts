@@ -56,7 +56,11 @@ export class QwenStatefulWebClient extends QwenWebClient {
 	protected override async callApi(page: Page, params: NormalizedSendParams): Promise<EvalResult> {
 		if (!params.statefulSession) return super.callApi(page, params);
 		if (!params.sessionId) {
-			return { ok: false, status: 400, error: "Qwen stateful request requires a stable session id" };
+			return {
+				ok: false,
+				status: 400,
+				error: "Qwen stateful request requires a stable session id",
+			};
 		}
 		if (params.resetSession) this.resetStatefulConversation();
 
@@ -128,10 +132,15 @@ export class QwenStatefulWebClient extends QwenWebClient {
 							project_id: "",
 						}),
 						credentials: "include",
-						 signal: controller.signal,
+						signal: controller.signal,
 					});
 					if (!res.ok) {
-						return { ok: false as const, status: res.status, error: await res.text(), stage: "create-chat" };
+						return {
+							ok: false as const,
+							status: res.status,
+							error: await res.text(),
+							stage: "create-chat",
+						};
 					}
 					const data = await res.json();
 					const chatId = data.data?.id ?? data.chat_id ?? data.id ?? data.chatId;
@@ -269,7 +278,12 @@ export class QwenStatefulWebClient extends QwenWebClient {
 
 					const reader = res.body?.getReader();
 					if (!reader) {
-						return { ok: false as const, status: 500, error: "Qwen response has no body", stage: "completion" };
+						return {
+							ok: false as const,
+							status: 500,
+							error: "Qwen response has no body",
+							stage: "completion",
+						};
 					}
 					const decoder = new TextDecoder();
 					let fullText = "";
