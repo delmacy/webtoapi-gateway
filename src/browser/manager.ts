@@ -63,7 +63,6 @@ class BrowserManager {
 	async createPage(fallbackUrl?: string): Promise<Page> {
 		const ctx = await this.getContext();
 		const page = await ctx.newPage();
-		watchProviderNavigation(page);
 		if (fallbackUrl) {
 			await page.goto(fallbackUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
 		}
