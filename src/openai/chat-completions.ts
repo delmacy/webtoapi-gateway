@@ -73,8 +73,8 @@ export async function handleChatCompletions(
 			? await fairUseGovernor.acquire(client.providerId, _fairUsePolicy)
 			: () => {};
 	const handler = body.stream
-		? handleStreaming(id, model, prompt, hasTools, body, client, release)
-		: handleNonStreaming(id, model, prompt, hasTools, body, client, release);
+		? handleStreaming(id, model, prompt, hasTools, body, client, optimized.sessionId, release)
+		: handleNonStreaming(id, model, prompt, hasTools, body, client, optimized.sessionId, release);
 
 	const timeout = new Promise<Response>((resolve) =>
 		setTimeout(() => {
@@ -94,10 +94,11 @@ async function handleNonStreaming(
 	hasTools: boolean,
 	body: ChatCompletionRequest,
 	client: WebProviderClient,
+	sessionId: string,
 	release: () => void,
 ): Promise<Response> {
 	try {
-		const stream = await client.sendMessage({ message: prompt, model });
+		const stream = await client.sendMessage({ message: prompt, model, sessionId });
 		const result = await client.parseStream(stream);
 		const { content, toolCalls, finishReason } = hasTools
 			? parseToolResponse(result.text, body.tools)
@@ -110,11 +111,13 @@ async function handleNonStreaming(
 			created: Math.floor(Date.now() / 1000),
 			model,
 			system_fingerprint: `fp_${id.slice(-12)}`,
-			choices: [{
-				index: 0,
-				message: { role: "assistant", content, ...(toolCalls ? { tool_calls: toolCalls } : {}) },
-				finish_reason: finishReason,
-			}],
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content, ...(toolCalls ? { tool_calls: toolCalls } : {}) },
+					finish_reason: finishReason,
+				},
+			],
 			usage: {
 				prompt_tokens: promptTokens,
 				completion_tokens: completionTokens,
@@ -178,11 +181,12 @@ async function handleStreaming(
 	hasTools: boolean,
 	body: ChatCompletionRequest,
 	client: WebProviderClient,
+	sessionId: string,
 	release: () => void,
 ): Promise<Response> {
 	let providerStream: ReadableStream<Uint8Array>;
 	try {
-		providerStream = await client.sendMessage({ message: prompt, model });
+		providerStream = await client.sendMessage({ message: prompt, model, sessionId });
 	} catch (err) {
 		release();
 		return providerErrorResponse(err, "streaming (pre-stream)");
