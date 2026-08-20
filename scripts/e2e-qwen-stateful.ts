@@ -112,10 +112,7 @@ assert(
 	header(first.response, "x-webtoapi-session-source") === "explicit",
 	"Expected explicit session source",
 );
-assert(
-	header(first.response, "x-webtoapi-stateful") === "true",
-	"Expected stateful Qwen session",
-);
+assert(header(first.response, "x-webtoapi-stateful") === "true", "Expected stateful Qwen session");
 assert(
 	header(first.response, "x-webtoapi-prompt-mode") === "full",
 	"Expected full bootstrap prompt",
