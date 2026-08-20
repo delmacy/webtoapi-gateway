@@ -79,6 +79,11 @@ const SESSION_SCOPED_CAPABILITIES: Record<string, ProviderSessionCapabilities> =
 		deltaPrompts: true,
 		resettable: true,
 	},
+	"qwen-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
 };
 
 /**
