@@ -35,20 +35,21 @@ const STRUCTURED_TOOLS: ToolDefinition[] = [
 describe("API backend tool contract", () => {
 	test("optimized tool prompt prevents fabricated execution", () => {
 		const prompt = buildToolPrompt(STRUCTURED_TOOLS, "en", false, true);
-		expect(prompt).toContain("API backend mode:");
+		expect(prompt).toContain("API backend mode");
+		expect(prompt).toContain("GW_AGENT_PROTOCOL/1");
 		expect(prompt).toContain("Never claim a tool ran unless a real <tool_result> was provided");
 	});
 
 	test("StructuredOutput is reserved for the final validated handoff", () => {
 		const prompt = buildToolPrompt(STRUCTURED_TOOLS, "en", false, true);
-		expect(prompt).toContain("Structured output is enabled via the StructuredOutput tool");
-		expect(prompt).toContain("Use normal tools first if the task requires work");
+		expect(prompt).toContain("StructuredOutput is the final structured handoff tool");
+		expect(prompt).toContain("Use real task tools first when needed");
 		expect(prompt).toContain("call StructuredOutput exactly once");
 	});
 
-	test("passthrough mode does not inject the optimized backend wrapper", () => {
+	test("passthrough mode does not inject the canonical backend wrapper", () => {
 		const prompt = buildToolPrompt(STRUCTURED_TOOLS, "en", false, false);
-		expect(prompt).not.toContain("API backend mode:");
+		expect(prompt).not.toContain("GW_AGENT_PROTOCOL/1");
 		expect(prompt).toContain("Structured output is enabled via the StructuredOutput tool");
 	});
 });

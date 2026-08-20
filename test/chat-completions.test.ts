@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatCompletionRequest, ChatCompletionResponse } from "../src/openai/types.ts";
+import { GW_JSON_END, GW_JSON_START } from "../src/protocol/types.ts";
 import { parseClaudeStream } from "../src/providers/claude/stream.ts";
 
 function createMockClient(responseText: string) {
@@ -24,6 +25,24 @@ function createMockClient(responseText: string) {
 		listModels: () => [{ id: "test-model", name: "Test" }],
 	};
 }
+
+function canonical(value: unknown): string {
+	return `${GW_JSON_START}\n${JSON.stringify(value)}\n${GW_JSON_END}`;
+}
+
+const EXEC_TOOL = {
+	type: "function" as const,
+	function: {
+		name: "exec",
+		description: "Run command",
+		parameters: {
+			type: "object",
+			properties: { command: { type: "string" } },
+			required: ["command"],
+			additionalProperties: false,
+		},
+	},
+};
 
 describe("chat completions handler (unit)", () => {
 	test("rejects empty messages", async () => {
@@ -98,24 +117,18 @@ describe("chat completions response format", () => {
 		expect(text).toContain("[DONE]");
 	});
 
-	test("tool_calls response has correct shape", async () => {
+	test("canonical tool_calls response has correct OpenAI shape", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const toolResponse = '```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```';
+		const toolResponse = canonical({
+			type: "tool_call",
+			calls: [{ name: "exec", arguments: { command: "ls" } }],
+		});
 		const mockClient = createMockClient(toolResponse);
 
 		const body: ChatCompletionRequest = {
 			model: "test",
 			messages: [{ role: "user", content: "List files" }],
-			tools: [
-				{
-					type: "function",
-					function: {
-						name: "exec",
-						description: "Run command",
-						parameters: { type: "object", properties: { command: { type: "string" } } },
-					},
-				},
-			],
+			tools: [EXEC_TOOL],
 		};
 
 		const res = await handleChatCompletions(body, mockClient as any);
@@ -126,8 +139,58 @@ describe("chat completions response format", () => {
 		expect(json.choices[0]?.message.content).toBeNull();
 		expect(json.choices[0]?.message.tool_calls).toHaveLength(1);
 		expect(json.choices[0]?.message.tool_calls?.[0]?.type).toBe("function");
-		expect(json.choices[0]?.message.tool_calls?.[0]?.id).toMatch(/^call_/);
+		expect(json.choices[0]?.message.tool_calls?.[0]?.id).toMatch(/^call_gw_/);
 		expect(json.choices[0]?.message.tool_calls?.[0]?.function.name).toBe("exec");
+	});
+
+	test("canonical tool_calls stream is validated before SSE starts", async () => {
+		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+		const mockClient = createMockClient(
+			canonical({ type: "tool_call", calls: [{ name: "exec", arguments: { command: "pwd" } }] }),
+		);
+		const body: ChatCompletionRequest = {
+			model: "test",
+			stream: true,
+			messages: [{ role: "user", content: "Where am I?" }],
+			tools: [EXEC_TOOL],
+		};
+		const res = await handleChatCompletions(body, mockClient as any);
+		expect(res.status).toBe(200);
+		const text = await res.text();
+		expect(text).toContain('"tool_calls"');
+		expect(text).toContain("call_gw_");
+		expect(text).toContain("[DONE]");
+	});
+
+	test("malformed optimized tool response fails closed with 502", async () => {
+		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+		const mockClient = createMockClient(
+			'```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```',
+		);
+		const body: ChatCompletionRequest = {
+			model: "test",
+			messages: [{ role: "user", content: "List files" }],
+			tools: [EXEC_TOOL],
+		};
+		const res = await handleChatCompletions(body, mockClient as any);
+		expect(res.status).toBe(502);
+		const json = (await res.json()) as { error: { type: string; code: string } };
+		expect(json.error.type).toBe("gateway_protocol_error");
+		expect(json.error.code).toBe("missing_envelope");
+	});
+
+	test("malformed optimized tool stream returns HTTP 502 before SSE", async () => {
+		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+		const mockClient = createMockClient("plain text instead of protocol envelope");
+		const body: ChatCompletionRequest = {
+			model: "test",
+			stream: true,
+			messages: [{ role: "user", content: "List files" }],
+			tools: [EXEC_TOOL],
+		};
+		const res = await handleChatCompletions(body, mockClient as any);
+		expect(res.status).toBe(502);
+		expect(res.headers.get("Content-Type")).toContain("application/json");
 	});
 
 	test("multi-turn tool flow (step 4: tool result → final answer)", async () => {
