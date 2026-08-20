@@ -3,7 +3,7 @@ import { runtimeProfiles, type RuntimeTransport } from "../providers/runtime-pro
 
 export interface NetworkObserverOptions {
 	providerId: string;
-	matches: (url: string) => boolean;
+	matches: (request: Request) => boolean;
 	transport?: RuntimeTransport;
 }
 
@@ -58,10 +58,11 @@ export function installNetworkObserver(page: Page, options: NetworkObserverOptio
 	providers.add(options.providerId);
 
 	page.on("request", (request) => {
-		if (options.matches(request.url())) observeRequest(options.providerId, request, options.transport);
+		if (options.matches(request)) observeRequest(options.providerId, request, options.transport);
 	});
 
 	page.on("response", (response) => {
-		if (options.matches(response.url())) observeResponse(options.providerId, response, options.transport);
+		const request = response.request();
+		if (options.matches(request)) observeResponse(options.providerId, response, options.transport);
 	});
 }
