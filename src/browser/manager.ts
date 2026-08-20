@@ -53,6 +53,15 @@ class BrowserManager {
 			return existing;
 		}
 
+		return this.createPage(fallbackUrl);
+	}
+
+	/**
+	 * Create a fresh page instead of reusing an existing provider tab.
+	 * Stateful DOM fallbacks use this to keep one logical session per tab.
+	 */
+	async createPage(fallbackUrl?: string): Promise<Page> {
+		const ctx = await this.getContext();
 		const page = await ctx.newPage();
 		watchProviderNavigation(page);
 		if (fallbackUrl) {
