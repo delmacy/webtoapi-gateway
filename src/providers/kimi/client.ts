@@ -38,10 +38,9 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 			: this.auth.siteUrl?.startsWith("https://")
 				? this.auth.siteUrl
 				: KIMI_FALLBACK_ORIGIN;
-		const endpoint =
-			profile?.endpoint?.includes("kimi.gateway.chat.v1.ChatService/Chat")
-				? profile.endpoint
-				: `${origin}${KIMI_CHAT_PATH}`;
+		const endpoint = profile?.endpoint?.includes("kimi.gateway.chat.v1.ChatService/Chat")
+			? profile.endpoint
+			: `${origin}${KIMI_CHAT_PATH}`;
 		return { origin, endpoint };
 	}
 
@@ -65,14 +64,13 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 
 		const cookie = this.auth.cookie || "";
 		if (cookie.trim()) {
-			const cookies = parseCookieHeader(cookie, `.${new URL(origin).hostname.replace(/^www\./, "")}`).map(
-				(c) => ({
-					...c,
-					...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-")
-						? { secure: true }
-						: {}),
-				}),
-			);
+			const cookies = parseCookieHeader(
+				cookie,
+				`.${new URL(origin).hostname.replace(/^www\./, "")}`,
+			).map((c) => ({
+				...c,
+				...(c.name.startsWith("__Secure-") || c.name.startsWith("__Host-") ? { secure: true } : {}),
+			}));
 			if (cookies.length > 0) await bm.addCookies(cookies);
 		}
 		return this.page;
@@ -169,12 +167,14 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 						try {
 							const decoded = new TextDecoder().decode(chunk);
 							const obj = JSON.parse(decoded);
-							if (framePreview.length < 12) framePreview.push(`flags=${flags} ${decoded.slice(0, 500)}`);
+							if (framePreview.length < 12)
+								framePreview.push(`flags=${flags} ${decoded.slice(0, 500)}`);
 							if (obj.error) {
 								return {
 									ok: false as const,
 									status: 502,
-									error: obj.error.message || obj.error.code || JSON.stringify(obj.error).slice(0, 400),
+									error:
+										obj.error.message || obj.error.code || JSON.stringify(obj.error).slice(0, 400),
 								};
 							}
 
@@ -232,7 +232,9 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 			}
 
 			if (("status" in result ? result.status : 0) !== 401) {
-				console.error(`[Kimi Web] ${endpoint}: ${"error" in result ? result.error : "Unknown error"}`);
+				console.error(
+					`[Kimi Web] ${endpoint}: ${"error" in result ? result.error : "Unknown error"}`,
+				);
 				return {
 					ok: false,
 					status: ("status" in result ? result.status : 502) as number,
