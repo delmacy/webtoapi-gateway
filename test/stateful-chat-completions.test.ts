@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	configureAgentLayer,
-	handleChatCompletions,
-} from "../src/openai/chat-completions.ts";
+import { configureAgentLayer, handleChatCompletions } from "../src/openai/chat-completions.ts";
 import type {
 	ChatCompletionRequest,
 	ChatCompletionResponse,
