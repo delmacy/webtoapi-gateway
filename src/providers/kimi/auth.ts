@@ -37,7 +37,9 @@ function cookieHeader(
 function findCookieToken(
 	cookies: Array<{ name: string; value: string; domain: string }>,
 ): string | undefined {
-	const preferred = ["kimi-auth", "access_token", "access-token", "token"];
+	// Only accept credential names known to be used by Kimi. Avoid generic
+	// cookies named "token", which can belong to unrelated site features.
+	const preferred = ["kimi-auth", "access_token", "access-token"];
 	for (const name of preferred) {
 		const hit = cookies.find(
 			(c) => KIMI_HOST_RE.test(c.domain.replace(/^\./, "")) && c.name === name && c.value,
@@ -45,6 +47,12 @@ function findCookieToken(
 		if (hit?.value) return hit.value;
 	}
 	return undefined;
+}
+
+function looksLikeCredential(value?: string): value is string {
+	if (!value) return false;
+	const v = value.trim();
+	return v.length >= 20 && v !== "undefined" && v !== "null";
 }
 
 async function readStorageTokens(page: import("playwright-core").Page): Promise<{
@@ -61,7 +69,7 @@ async function readStorageTokens(page: import("playwright-core").Page): Promise<
 				return undefined;
 			};
 			return {
-				accessToken: first("access_token", "accessToken", "kimi-auth", "token"),
+				accessToken: first("access_token", "accessToken", "kimi-auth"),
 				refreshToken: first("refresh_token", "refreshToken"),
 			};
 		});
@@ -96,9 +104,6 @@ export async function loginKimiWeb(params: {
 	const context = browser.contexts()[0];
 	if (!context) throw new Error("No browser context available");
 
-	// Reuse either Kimi international (kimi.ai) or Kimi web (kimi.com) when the
-	// user already has one open. Prefer the international tab because this is the
-	// variant the original webauth did not understand.
 	const pages = context.pages();
 	let page =
 		pages.find((p) => {
@@ -132,8 +137,6 @@ export async function loginKimiWeb(params: {
 	let matchedPage = page;
 
 	while (Date.now() < deadline) {
-		// Authentication can redirect between Kimi domains. Follow whichever Kimi
-		// tab is currently active/authenticated rather than assuming one hostname.
 		const kimiPages = context.pages().filter((p) => isKimiUrl(p.url()));
 		if (kimiPages.length > 0) {
 			matchedPage =
@@ -148,8 +151,11 @@ export async function loginKimiWeb(params: {
 
 		const storage = await readStorageTokens(matchedPage);
 		const cookies = await context.cookies();
-		accessToken = storage.accessToken || findCookieToken(cookies);
-		refreshToken = storage.refreshToken;
+		const candidate = storage.accessToken || findCookieToken(cookies);
+		accessToken = looksLikeCredential(candidate) ? candidate.trim() : undefined;
+		refreshToken = looksLikeCredential(storage.refreshToken)
+			? storage.refreshToken.trim()
+			: undefined;
 
 		if (accessToken) break;
 		await new Promise((r) => setTimeout(r, 1000));
