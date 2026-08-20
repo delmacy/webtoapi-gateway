@@ -1,5 +1,5 @@
-import { fairUseGovernor, type FairUsePolicy } from "../agent/governor.ts";
-import { agentRuntime, type AgentMode, type AgentRuntimeConfig } from "../agent/runtime.ts";
+import { type FairUsePolicy, fairUseGovernor } from "../agent/governor.ts";
+import { type AgentMode, type AgentRuntimeConfig, agentRuntime } from "../agent/runtime.ts";
 import { evictProviderClient } from "../providers/registry.ts";
 import type { WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
@@ -20,7 +20,10 @@ export function setRouteTimeoutSec(sec: number): void {
 	_routeTimeoutMs = sec * 1000;
 }
 
-export function configureAgentLayer(runtimeConfig: AgentRuntimeConfig, fairUsePolicy: FairUsePolicy): void {
+export function configureAgentLayer(
+	runtimeConfig: AgentRuntimeConfig,
+	fairUsePolicy: FairUsePolicy,
+): void {
 	agentRuntime.configure(runtimeConfig);
 	_agentMode = runtimeConfig.mode;
 	_fairUsePolicy = {
@@ -270,7 +273,9 @@ function providerErrorResponse(err: unknown, context: string): Response {
 		return jsonError(err.message, 401);
 	}
 	if (err instanceof ProviderApiError) {
-		console.error(`[chat-completions] ${context}: provider error ${err.httpStatus}: ${err.message}`);
+		console.error(
+			`[chat-completions] ${context}: provider error ${err.httpStatus}: ${err.message}`,
+		);
 		return jsonError(err.message, err.httpStatus);
 	}
 	const message = err instanceof Error ? err.message : String(err);
