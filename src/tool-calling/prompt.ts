@@ -98,7 +98,9 @@ export function buildToolPrompt(
 	if (compact) {
 		const contract = buildCanonicalProtocolContract({ lang, forceUse, hasStructuredOutput });
 		const signatureHint =
-			lang === "cn" ? "工具签名中 ! 表示必填参数，? 表示可选参数。" : "In tool signatures, ! means required and ? means optional.";
+			lang === "cn"
+				? "工具签名中 ! 表示必填参数，? 表示可选参数。"
+				: "In tool signatures, ! means required and ? means optional.";
 		const toolsLabel = lang === "cn" ? "可用工具:" : "Available tools:";
 		return `${contract}\n\n${signatureHint}\n\n${toolsLabel}\n${defs}\n`;
 	}
