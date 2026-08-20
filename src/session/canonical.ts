@@ -42,7 +42,7 @@ function normalizeJson(value: unknown): unknown {
 }
 
 export function stableJson(value: unknown): string {
-	return JSON.stringify(normalizeJson(value));
+	return JSON.stringify(normalizeJson(value)) ?? "null";
 }
 
 export function semanticHash(value: unknown): string {
