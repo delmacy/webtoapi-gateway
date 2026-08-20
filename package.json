@@ -16,6 +16,7 @@
 		"typecheck": "bunx tsc --noEmit",
 		"webauth": "bun index.ts webauth",
 		"e2e:deepseek-stateful": "bun scripts/e2e-deepseek-stateful.ts",
+		"e2e:deepseek-isolation": "bun scripts/e2e-deepseek-isolation.ts",
 		"e2e:chatgpt-stateful": "bun scripts/e2e-chatgpt-stateful.ts",
 		"e2e:chatgpt-dom-isolation": "bun scripts/e2e-chatgpt-dom-isolation.ts",
 		"build": "bun build index.ts --compile --external chromium-bidi --external electron --outfile token-free-gateway",
