@@ -30,6 +30,12 @@ export interface ToolRegistrySnapshot {
 	names: string[];
 }
 
+type LegacyFunctionMessage = {
+	role: "function";
+	name?: string;
+	content: string;
+};
+
 function normalizeJson(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(normalizeJson);
 	if (value && typeof value === "object") {
@@ -101,6 +107,16 @@ export function normalizeOpenAiMessages(messages: ChatMessage[]): CanonicalEvent
 	};
 
 	messages.forEach((message, sourceMessageIndex) => {
+		const legacy = message as unknown as Partial<LegacyFunctionMessage>;
+		if (legacy.role === "function" && typeof legacy.content === "string") {
+			push("tool_result", sourceMessageIndex, {
+				callId: legacy.name ?? "unknown",
+				content: legacy.content,
+				legacy: true,
+			});
+			return;
+		}
+
 		switch (message.role) {
 			case "system":
 				push("system_instruction", sourceMessageIndex, { content: message.content });
@@ -132,16 +148,6 @@ export function normalizeOpenAiMessages(messages: ChatMessage[]): CanonicalEvent
 					content: tool.content,
 				});
 				break;
-			}
-			default: {
-				const legacy = message as ChatMessage & { role?: string; name?: string; content?: unknown };
-				if (legacy.role === "function" && typeof legacy.content === "string") {
-					push("tool_result", sourceMessageIndex, {
-						callId: legacy.name ?? "unknown",
-						content: legacy.content,
-						legacy: true,
-					});
-				}
 			}
 		}
 	});
