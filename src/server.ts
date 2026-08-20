@@ -137,7 +137,8 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 				},
 			},
 			{ status: 404 },
-		);
+		),
+		;
 	}
 
 	return handleChatCompletions(body, provider);
@@ -190,6 +191,18 @@ console.log(
 console.log(
 	`Authorized providers: ${authorized.length > 0 ? authorized.join(", ") : "none — run 'token-free-gateway webauth' to authorize"}`,
 );
+
+// Eagerly connect to the authenticated Chrome session so provider network
+// observers are installed before the user sends manual messages in the tabs.
+// Previously BrowserManager was lazy and /health only performed a lightweight
+// CDP probe, so runtime discovery never started until a provider API call.
+try {
+	await BrowserManager.getInstance().getContext();
+} catch (err) {
+	console.warn(
+		`[BrowserManager] Runtime discovery startup failed: ${err instanceof Error ? err.message : String(err)}`,
+	);
+}
 
 async function gracefulShutdown(signal: string) {
 	console.log(`\nReceived ${signal}, shutting down...`);
