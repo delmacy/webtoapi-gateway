@@ -51,6 +51,14 @@ function createSequenceClient(responses: string[]) {
 	};
 }
 
+function parseSseChunks(text: string): Record<string, unknown>[] {
+	return text
+		.split("\n\n")
+		.map((event) => event.trim())
+		.filter((event) => event.startsWith("data: ") && event !== "data: [DONE]")
+		.map((event) => JSON.parse(event.slice("data: ".length)) as Record<string, unknown>);
+}
+
 describe("protocol repair semantic preservation E2E", () => {
 	test("streaming plain terminal prose is returned verbatim and never triggers a second provider inference", async () => {
 		const blocked = [
@@ -74,8 +82,32 @@ describe("protocol repair semantic preservation E2E", () => {
 		expect(client.calls).toBe(1);
 
 		const text = await res.text();
-		expect(text).toContain(blocked);
-		expect(text).toContain('"finish_reason":"stop"');
+		const chunks = parseSseChunks(text);
+		const contents = chunks
+			.map((chunk) => {
+				const choices = chunk.choices;
+				if (!Array.isArray(choices)) return undefined;
+				const first = choices[0];
+				if (typeof first !== "object" || first === null) return undefined;
+				const delta = (first as { delta?: unknown }).delta;
+				if (typeof delta !== "object" || delta === null) return undefined;
+				const content = (delta as { content?: unknown }).content;
+				return typeof content === "string" ? content : undefined;
+			})
+			.filter((content): content is string => content !== undefined);
+		const finishReasons = chunks
+			.map((chunk) => {
+				const choices = chunk.choices;
+				if (!Array.isArray(choices)) return undefined;
+				const first = choices[0];
+				if (typeof first !== "object" || first === null) return undefined;
+				const finishReason = (first as { finish_reason?: unknown }).finish_reason;
+				return typeof finishReason === "string" ? finishReason : undefined;
+			})
+			.filter((reason): reason is string => reason !== undefined);
+
+		expect(contents.join("")).toBe(blocked);
+		expect(finishReasons).toContain("stop");
 		expect(text).not.toContain("TASK-158 EXECUTED");
 		expect(text).not.toContain("4f8b3c9e1d2a5b7c8f9e0d1a2b3c4d5e6f7a8b9c");
 	});
