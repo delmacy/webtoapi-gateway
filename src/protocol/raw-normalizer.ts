@@ -15,6 +15,8 @@ export interface NormalizedProtocolResponse {
 	canonicalText: string;
 }
 
+const DEBUG_PREVIEW_CHARS = 800;
+
 function wrapJson(raw: string): string {
 	return `${GW_JSON_START}\n${raw.trim()}\n${GW_JSON_END}`;
 }
@@ -101,17 +103,30 @@ function parseCandidate(
 	};
 }
 
-/**
- * Deterministically normalizes raw model output without inferring semantic intent.
- * Only already-structured protocol JSON is recovered. Natural-language tool intent
- * is never converted into an action.
- */
-export function normalizeRawProtocolResponse(
-	text: string,
+function debugEnabled(): boolean {
+	return process.env.WEBTOAPI_PROTOCOL_DEBUG === "1";
+}
+
+function sanitizeDebugPreview(text: string): string {
+	return text
+		.replace(/\r/g, "\\r")
+		.replace(/\n/g, "\\n")
+		.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "?");
+}
+
+function logProtocolFailure(error: GatewayProtocolError, raw: string): void {
+	if (!debugEnabled()) return;
+	const start = sanitizeDebugPreview(raw.slice(0, DEBUG_PREVIEW_CHARS));
+	const end = sanitizeDebugPreview(raw.slice(-DEBUG_PREVIEW_CHARS));
+	console.warn(
+		`[protocol-debug] code=${error.code} chars=${raw.length} start=${JSON.stringify(start)} end=${JSON.stringify(end)}`,
+	);
+}
+
+function normalizeRawProtocolResponseInternal(
+	sanitized: string,
 	requestedTools?: ToolDefinition[],
 ): NormalizedProtocolResponse {
-	const sanitized = text.replace(/^\uFEFF/, "").trim();
-
 	try {
 		return {
 			parsed: parseCanonicalToolResponse(sanitized, requestedTools),
@@ -159,5 +174,27 @@ export function normalizeRawProtocolResponse(
 		}
 
 		throw strictError;
+	}
+}
+
+/**
+ * Deterministically normalizes raw model output without inferring semantic intent.
+ * Only already-structured protocol JSON is recovered. Natural-language tool intent
+ * is never converted into an action.
+ *
+ * Set WEBTOAPI_PROTOCOL_DEBUG=1 to log bounded raw previews for final protocol
+ * failures. Debug logging is opt-in because raw provider output can contain
+ * repository or user content.
+ */
+export function normalizeRawProtocolResponse(
+	text: string,
+	requestedTools?: ToolDefinition[],
+): NormalizedProtocolResponse {
+	const sanitized = text.replace(/^\uFEFF/, "").trim();
+	try {
+		return normalizeRawProtocolResponseInternal(sanitized, requestedTools);
+	} catch (error) {
+		if (error instanceof GatewayProtocolError) logProtocolFailure(error, sanitized);
+		throw error;
 	}
 }
