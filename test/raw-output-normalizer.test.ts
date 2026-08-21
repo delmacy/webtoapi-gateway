@@ -45,13 +45,17 @@ describe("raw protocol normalizer", () => {
 	});
 
 	test("recovers canonical JSON inside a markdown fence", () => {
-		const result = normalizeRawProtocolResponse(`Here:\n\`\`\`json\n${action}\n\`\`\``, [EXEC_TOOL]);
+		const result = normalizeRawProtocolResponse(`Here:\n\`\`\`json\n${action}\n\`\`\``, [
+			EXEC_TOOL,
+		]);
 		expect(result.mode).toBe("fenced-json");
 		expect(result.parsed.toolCalls).toHaveLength(1);
 	});
 
 	test("recovers one embedded canonical JSON object from inert prose", () => {
-		const result = normalizeRawProtocolResponse(`I will serialize it now:\n${action}\nDone.`, [EXEC_TOOL]);
+		const result = normalizeRawProtocolResponse(`I will serialize it now:\n${action}\nDone.`, [
+			EXEC_TOOL,
+		]);
 		expect(result.mode).toBe("embedded-json");
 		expect(result.parsed.toolCalls?.[0]?.function.arguments).toBe('{"command":"ls"}');
 	});
@@ -63,9 +67,9 @@ describe("raw protocol normalizer", () => {
 	});
 
 	test("rejects multiple JSON objects instead of choosing one", () => {
-		expect(() =>
-			normalizeRawProtocolResponse(`${action}\n${action}`, [EXEC_TOOL]),
-		).toThrow(GatewayProtocolError);
+		expect(() => normalizeRawProtocolResponse(`${action}\n${action}`, [EXEC_TOOL])).toThrow(
+			GatewayProtocolError,
+		);
 	});
 
 	test("semantic validation still rejects unknown tools", () => {
