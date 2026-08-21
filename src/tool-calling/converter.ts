@@ -16,7 +16,7 @@ import type {
 	ToolMessage,
 } from "../openai/types.ts";
 import { parseCanonicalToolResponse } from "../protocol/parser.ts";
-import { GW_JSON_END, GW_JSON_START } from "../protocol/types.ts";
+import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "../protocol/types.ts";
 import { extractToolCalls, hasToolCall } from "./parser.ts";
 import { buildToolPrompt, detectLanguage } from "./prompt.ts";
 
@@ -203,9 +203,35 @@ export function buildPromptFromMessages(
 	return { prompt: parts.join("\n\n"), hasTools };
 }
 
+function canonicalizeSingleEnvelope(text: string): string | undefined {
+	const start = text.indexOf(GW_JSON_START);
+	const end = text.indexOf(GW_JSON_END, start + GW_JSON_START.length);
+	if (start < 0 || end < 0) return undefined;
+	if (text.indexOf(GW_JSON_START, start + GW_JSON_START.length) >= 0) return undefined;
+	if (text.indexOf(GW_JSON_END, end + GW_JSON_END.length) >= 0) return undefined;
+	return text.slice(start, end + GW_JSON_END.length);
+}
+
+function parseStrictToolResponse(text: string, requestedTools?: ToolDefinition[]) {
+	try {
+		return parseCanonicalToolResponse(text, requestedTools);
+	} catch (error) {
+		if (!(error instanceof GatewayProtocolError) || error.code !== "trailing_content") throw error;
+		const canonical = canonicalizeSingleEnvelope(text);
+		if (!canonical) throw error;
+		const parsed = parseCanonicalToolResponse(canonical, requestedTools);
+		console.warn(
+			"[tool-calling] canonicalized one valid GW_JSON envelope and discarded non-action trailing prose",
+		);
+		return parsed;
+	}
+}
+
 /**
  * Parse text response and detect tool calls.
- * Strict mode requires GW_AGENT_PROTOCOL/1; legacy mode preserves tool_json parsing.
+ * Strict mode requires GW_AGENT_PROTOCOL/1. A response containing exactly one
+ * valid envelope plus inert surrounding prose is canonicalized deterministically;
+ * the surrounding prose is never interpreted as an action.
  */
 export function parseToolResponse(
 	text: string,
@@ -217,7 +243,7 @@ export function parseToolResponse(
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 } {
-	if (strictProtocol) return parseCanonicalToolResponse(text, requestedTools);
+	if (strictProtocol) return parseStrictToolResponse(text, requestedTools);
 
 	if (!requestedTools || requestedTools.length === 0 || !hasToolCall(text)) {
 		return {
