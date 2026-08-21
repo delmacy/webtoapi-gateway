@@ -37,7 +37,8 @@ configureAgentLayer(
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type, Authorization, X-WebToAPI-Session-Id",
+	"Access-Control-Allow-Headers":
+		"Content-Type, Authorization, X-WebToAPI-Session-Id, X-OpenCode-Session, X-Session-Id, X-Session-Affinity, X-Parent-Session-Id",
 };
 
 function withCors(res: Response): Response {
@@ -117,7 +118,61 @@ async function handleHealthRoute(): Promise<Response> {
 	});
 }
 
+function logOpenCodeHeaders(req: Request): void {
+	const interesting = [
+		"x-opencode-session",
+		"x-opencode-request",
+		"x-opencode-project",
+		"x-opencode-client",
+		"x-webtoapi-session-id",
+		"x-session-affinity",
+		"x-session-id",
+		"x-parent-session-id",
+		"user-agent",
+	];
+	const values = interesting
+		.map((name) => {
+			const value = req.headers.get(name)?.trim();
+			return value ? `${name}=${value}` : undefined;
+		})
+		.filter((value): value is string => Boolean(value));
+	console.log(
+		`[request-headers] ${values.length > 0 ? values.join(" ") : "no-opencode-session-headers"}`,
+	);
+}
+
+function resolveSessionIdOverride(req: Request): string | undefined {
+	return (
+		req.headers.get("x-webtoapi-session-id")?.trim() ||
+		req.headers.get("x-opencode-session")?.trim() ||
+		req.headers.get("x-session-affinity")?.trim() ||
+		req.headers.get("x-session-id")?.trim() ||
+		undefined
+	);
+}
+
+function hasAgentToolContext(body: any): boolean {
+	if (Array.isArray(body?.tools) && body.tools.length > 0) return true;
+	if (!Array.isArray(body?.messages)) return false;
+	return body.messages.some((message: any) => {
+		if (message?.role === "tool" || message?.role === "function") return true;
+		return (
+			message?.role === "assistant" &&
+			Array.isArray(message?.tool_calls) &&
+			message.tool_calls.length > 0
+		);
+	});
+}
+
+function resolveOpenCodeAffinity(req: Request, body: any): string | undefined {
+	const session = resolveSessionIdOverride(req);
+	if (!session) return undefined;
+	return `${session}:${hasAgentToolContext(body) ? "agent" : "aux"}`;
+}
+
 async function handleChatCompletionsRoute(req: Request): Promise<Response> {
+	logOpenCodeHeaders(req);
+
 	let body: any;
 	try {
 		body = await req.json();
@@ -141,8 +196,9 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 		);
 	}
 
-	const sessionIdOverride = req.headers.get("x-webtoapi-session-id")?.trim() || undefined;
-	return handleChatCompletions(body, provider, { sessionIdOverride });
+	return handleChatCompletions(body, provider, {
+		sessionIdOverride: resolveOpenCodeAffinity(req, body),
+	});
 }
 
 async function handleModelsRoute(): Promise<Response> {

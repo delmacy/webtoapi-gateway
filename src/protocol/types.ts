@@ -8,8 +8,20 @@ export interface GatewayToolCall {
 }
 
 export type GatewayEnvelope =
-	| { type: "message"; content: string }
-	| { type: "tool_call"; calls: GatewayToolCall[] }
+	| {
+			type: "message";
+			content: string;
+			/** Optional provider reasoning metadata; omit when unavailable. */
+			reasoning_content?: string;
+	  }
+	| {
+			type: "tool_call";
+			calls: GatewayToolCall[];
+			/** Optional user-visible progress text emitted before requesting tools. */
+			content?: string;
+			/** Optional provider reasoning metadata; omit when unavailable. */
+			reasoning_content?: string;
+	  }
 	| { type: "error"; message: string };
 
 export type GatewayProtocolErrorCode =

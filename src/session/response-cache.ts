@@ -3,6 +3,7 @@ import { normalizeOpenAiMessages, semanticHash, snapshotToolRegistry } from "./c
 
 export interface CachedAgentResponse {
 	content: string | null;
+	reasoningContent?: string;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 	rawText: string;
@@ -39,6 +40,8 @@ export function fingerprintChatRequest(body: ChatCompletionRequest): string {
 		toolChoice: body.tool_choice ?? null,
 		temperature: body.temperature ?? null,
 		maxTokens: body.max_tokens ?? null,
+		reasoningEffort: body.reasoning_effort ?? null,
+		parallelToolCalls: body.parallel_tool_calls ?? null,
 	});
 }
 

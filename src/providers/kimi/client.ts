@@ -27,6 +27,9 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		],
 	};
 
+	private chatId = "";
+	private parentMessageId: string | null = null;
+
 	protected getCookies(): BrowserCookie[] {
 		return [];
 	}
@@ -98,7 +101,16 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 		}
 
 		const model = params.model;
+		const stateful = Boolean(params.sessionId?.trim());
+		const chatId = stateful ? this.chatId : "";
+		const parentMessageId = stateful ? this.parentMessageId : null;
 		let lastAuthError: EvalResult | null = null;
+
+		if (stateful && chatId) {
+			console.log(
+				`[Kimi Web] stage=reuse-chat chatId=${chatId} parentId=${parentMessageId ?? "null"}`,
+			);
+		}
 
 		for (const authToken of authCandidates) {
 			const result = await page.evaluate(
@@ -108,16 +120,25 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					message,
 					kimiAuthToken,
 					scenario,
+					chatId,
+					parentMessageId,
+					trackState,
 				}: {
 					origin: string;
 					endpoint: string;
 					message: string;
 					kimiAuthToken: string;
 					scenario: string;
+					chatId: string;
+					parentMessageId: string | null;
+					trackState: boolean;
 				}) => {
 					const req = {
+						...(chatId ? { chat_id: chatId } : {}),
 						scenario,
+						tools: [],
 						message: {
+							...(parentMessageId ? { parent_id: parentMessageId } : {}),
 							role: "user" as const,
 							blocks: [{ message_id: "", text: { content: message } }],
 							scenario,
@@ -138,7 +159,7 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 							"Connect-Protocol-Version": "1",
 							Accept: "*/*",
 							Origin: origin,
-							Referer: `${origin}/`,
+							Referer: chatId ? `${origin}/chat/${chatId}` : `${origin}/`,
 							"X-Language": "en-US",
 							"X-Msh-Platform": "web",
 							Authorization: `Bearer ${kimiAuthToken}`,
@@ -158,6 +179,8 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 					const u8 = new Uint8Array(arr);
 					const texts: string[] = [];
 					const framePreview: string[] = [];
+					let observedChatId = chatId;
+					let observedMessageId = parentMessageId ?? "";
 					let o = 0;
 					while (o + 5 <= u8.length) {
 						const flags = u8[o] ?? 0;
@@ -176,6 +199,13 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 									error:
 										obj.error.message || obj.error.code || JSON.stringify(obj.error).slice(0, 400),
 								};
+							}
+
+							if (typeof obj.chat?.id === "string" && obj.chat.id) {
+								observedChatId = obj.chat.id;
+							}
+							if (typeof obj.message?.id === "string" && obj.message.id) {
+								observedMessageId = obj.message.id;
 							}
 
 							const op = obj.op || "";
@@ -209,7 +239,19 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 							error: `Kimi returned ${u8.length} bytes but no assistant text was decoded. Frames: ${framePreview.join(" | ")}`,
 						};
 					}
-					return { ok: true as const, text: texts.join("") };
+					if (trackState && (!observedChatId || !observedMessageId)) {
+						return {
+							ok: false as const,
+							status: 502,
+							error: `Kimi completed but did not return state ids. chatId=${observedChatId || "<missing>"} messageId=${observedMessageId || "<missing>"}`,
+						};
+					}
+					return {
+						ok: true as const,
+						text: texts.join(""),
+						chatId: observedChatId,
+						messageId: observedMessageId,
+					};
 				},
 				{
 					origin,
@@ -223,10 +265,20 @@ export class KimiWebClient extends BaseApiClient<KimiWebAuth> {
 							: model.includes("k1")
 								? "SCENARIO_K1"
 								: "SCENARIO_K2",
+					chatId,
+					parentMessageId,
+					trackState: stateful,
 				},
 			);
 
 			if (result.ok) {
+				if (stateful) {
+					this.chatId = result.chatId;
+					this.parentMessageId = result.messageId;
+					console.log(
+						`[Kimi Web] stage=state:updated chatId=${this.chatId} parentId=${this.parentMessageId}`,
+					);
+				}
 				const escaped = JSON.stringify(result.text);
 				return { ok: true, data: `data: {"text":${escaped}}\n\ndata: [DONE]\n\n` };
 			}
