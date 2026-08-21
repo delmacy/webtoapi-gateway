@@ -16,7 +16,7 @@ import type {
 	ToolMessage,
 } from "../openai/types.ts";
 import { normalizeRawProtocolResponse } from "../protocol/raw-normalizer.ts";
-import { GW_JSON_END, GW_JSON_START } from "../protocol/types.ts";
+import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "../protocol/types.ts";
 import { extractToolCalls, hasToolCall } from "./parser.ts";
 import { buildToolPrompt, detectLanguage } from "./prompt.ts";
 
@@ -186,17 +186,35 @@ export function buildPromptFromMessages(
 }
 
 function parseStrictToolResponse(text: string, requestedTools?: ToolDefinition[]) {
-	const normalized = normalizeRawProtocolResponse(text, requestedTools);
-	if (normalized.mode !== "exact-envelope") {
-		console.warn(`[tool-calling] normalized raw provider output mode=${normalized.mode}`);
+	try {
+		const normalized = normalizeRawProtocolResponse(text, requestedTools);
+		if (normalized.mode !== "exact-envelope") {
+			console.warn(`[tool-calling] normalized raw provider output mode=${normalized.mode}`);
+		}
+		return normalized.parsed;
+	} catch (error) {
+		if (
+			error instanceof GatewayProtocolError &&
+			error.code === "missing_envelope" &&
+			text.trim().length > 0
+		) {
+			console.warn("[tool-calling] preserved terminal prose without protocol reinference");
+			return {
+				content: text,
+				reasoningContent: undefined,
+				toolCalls: undefined,
+				finishReason: "stop" as const,
+			};
+		}
+		throw error;
 	}
-	return normalized.parsed;
 }
 
 /**
  * Parse text response and detect tool calls.
- * Strict mode still requires canonical GW_AGENT_PROTOCOL semantics, but accepts
- * deterministic syntactic recovery from raw provider output before validation.
+ * Strict mode still requires canonical GW_AGENT_PROTOCOL semantics for actions, but accepts
+ * deterministic syntactic recovery from raw provider output before validation. Plain terminal
+ * prose is preserved as a message without asking the provider to infer the task again.
  * Natural-language intent is never inferred into an action.
  */
 export function parseToolResponse(
