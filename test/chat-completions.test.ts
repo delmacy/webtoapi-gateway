@@ -126,7 +126,7 @@ describe("chat completions response format", () => {
 		const mockClient = createMockClient(toolResponse);
 
 		const body: ChatCompletionRequest = {
-			model: "test",
+			model: "test-model",
 			messages: [{ role: "user", content: "List files" }],
 			tools: [EXEC_TOOL],
 		};
@@ -220,36 +220,44 @@ describe("chat completions response format", () => {
 		expect(text).toContain("[DONE]");
 	});
 
-	test("malformed optimized tool response fails closed with 502", async () => {
-		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const mockClient = createMockClient(
-			'```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```',
-		);
-		const body: ChatCompletionRequest = {
-			model: "test",
-			messages: [{ role: "user", content: "List files" }],
-			tools: [EXEC_TOOL],
-		};
-		const res = await handleChatCompletions(body, mockClient as any);
-		expect(res.status).toBe(502);
-		const json = (await res.json()) as { error: { type: string; code: string } };
-		expect(json.error.type).toBe("gateway_protocol_error");
-		expect(json.error.code).toBe("missing_envelope");
-	});
+	test(
+		"malformed optimized tool response fails closed with 502",
+		async () => {
+			const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+			const mockClient = createMockClient(
+				'```tool_json\n{"tool":"exec","parameters":{"command":"ls"}}\n```',
+			);
+			const body: ChatCompletionRequest = {
+				model: "test",
+				messages: [{ role: "user", content: "List files" }],
+				tools: [EXEC_TOOL],
+			};
+			const res = await handleChatCompletions(body, mockClient as any);
+			expect(res.status).toBe(502);
+			const json = (await res.json()) as { error: { type: string; code: string } };
+			expect(json.error.type).toBe("gateway_protocol_error");
+			expect(json.error.code).toBe("missing_envelope");
+		},
+		8000,
+	);
 
-	test("malformed optimized tool stream returns HTTP 502 before SSE", async () => {
-		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const mockClient = createMockClient("plain text instead of protocol envelope");
-		const body: ChatCompletionRequest = {
-			model: "test",
-			stream: true,
-			messages: [{ role: "user", content: "List files" }],
-			tools: [EXEC_TOOL],
-		};
-		const res = await handleChatCompletions(body, mockClient as any);
-		expect(res.status).toBe(502);
-		expect(res.headers.get("Content-Type")).toContain("application/json");
-	});
+	test(
+		"malformed optimized tool stream returns HTTP 502 before SSE",
+		async () => {
+			const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
+			const mockClient = createMockClient("plain text instead of protocol envelope");
+			const body: ChatCompletionRequest = {
+				model: "test",
+				stream: true,
+				messages: [{ role: "user", content: "List files" }],
+				tools: [EXEC_TOOL],
+			};
+			const res = await handleChatCompletions(body, mockClient as any);
+			expect(res.status).toBe(502);
+			expect(res.headers.get("Content-Type")).toContain("application/json");
+		},
+		8000,
+	);
 
 	test("multi-turn tool flow (step 4: tool result → final answer)", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
