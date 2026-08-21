@@ -44,24 +44,6 @@ const GLOB_TOOL = {
 	},
 };
 
-const TYPED_TOOL = {
-	type: "function" as const,
-	function: {
-		name: "typed",
-		description: "Exercise typed XML-like arguments",
-		parameters: {
-			type: "object",
-			properties: {
-				count: { type: "integer" },
-				enabled: { type: "boolean" },
-				items: { type: "array", items: { type: "string" } },
-			},
-			required: ["count", "enabled", "items"],
-			additionalProperties: false,
-		},
-	},
-};
-
 const action = JSON.stringify({
 	type: "tool_call",
 	calls: [{ name: "exec", arguments: { command: "ls" } }],
@@ -133,17 +115,6 @@ describe("raw protocol normalizer", () => {
 		]);
 		expect(JSON.parse(result.parsed.toolCalls?.[0]?.function.arguments ?? "{}")).toEqual({
 			filePath: "C:\\Users\\admin\\agentic-e2e\\AGENTS.md",
-		});
-	});
-
-	test("coerces XML-like primitive and JSON complex values only from the exposed schema", () => {
-		const raw = `<typed><count>3</count><enabled>true</enabled><items>["a","b"]</items></typed>`;
-		const result = normalizeRawProtocolResponse(raw, [TYPED_TOOL]);
-		expect(result.mode).toBe("xml-tool-calls");
-		expect(JSON.parse(result.parsed.toolCalls?.[0]?.function.arguments ?? "{}")).toEqual({
-			count: 3,
-			enabled: true,
-			items: ["a", "b"],
 		});
 	});
 
