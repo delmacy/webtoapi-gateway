@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { handleChatCompletions } from "../src/openai/chat-completions.ts";
-import type { ChatCompletionRequest, ChatCompletionResponse } from "../src/openai/types.ts";
+import type { ChatCompletionRequest } from "../src/openai/types.ts";
 import { GW_JSON_END, GW_JSON_START } from "../src/protocol/types.ts";
 import { parseClaudeStream } from "../src/providers/claude/stream.ts";
 
@@ -52,7 +52,7 @@ function createSequenceClient(responses: string[]) {
 }
 
 describe("protocol repair semantic preservation E2E", () => {
-	test("plain terminal prose is returned verbatim and never triggers a second provider inference", async () => {
+	test("streaming plain terminal prose is returned verbatim and never triggers a second provider inference", async () => {
 		const blocked = [
 			"TASK-158 blocked: required behavior is not currently observable within the allowed scope.",
 			"Stop. No changes made.",
@@ -63,20 +63,20 @@ describe("protocol repair semantic preservation E2E", () => {
 		const client = createSequenceClient([blocked, fabricated]);
 		const body: ChatCompletionRequest = {
 			model: "test-model",
+			stream: true,
 			messages: [{ role: "user", content: "Execute TASK-158 and stop if blocked." }],
 			tools: [EXEC_TOOL],
 		};
 
 		const res = await handleChatCompletions(body, client as any);
 		expect(res.status).toBe(200);
+		expect(res.headers.get("Content-Type")).toContain("text/event-stream");
 		expect(client.calls).toBe(1);
 
-		const json = (await res.json()) as ChatCompletionResponse;
-		const choice = json.choices[0];
-		expect(choice?.finish_reason).toBe("stop");
-		expect(choice?.message.content).toBe(blocked);
-		expect(choice?.message.tool_calls).toBeUndefined();
-		expect(choice?.message.content).not.toContain("TASK-158 EXECUTED");
-		expect(choice?.message.content).not.toContain("4f8b3c9e1d2a5b7c8f9e0d1a2b3c4d5e6f7a8b9c");
+		const text = await res.text();
+		expect(text).toContain(blocked);
+		expect(text).toContain('"finish_reason":"stop"');
+		expect(text).not.toContain("TASK-158 EXECUTED");
+		expect(text).not.toContain("4f8b3c9e1d2a5b7c8f9e0d1a2b3c4d5e6f7a8b9c");
 	});
 });
