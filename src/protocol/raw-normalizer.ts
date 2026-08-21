@@ -145,6 +145,7 @@ function parseXmlArguments(body: string, tool: ToolDefinition): Record<string, u
 	const properties = schemaProperties(tool);
 	const argumentsObject: Record<string, unknown> = {};
 	const childRegex = new RegExp(`<(${XML_NAME})>\\s*([\\s\\S]*?)\\s*</\\1>`, "g");
+	const nestedTagRegex = new RegExp(`<\\/?${XML_NAME}(?:\\s[^>]*)?>`);
 	let cursor = 0;
 	let matched = false;
 
@@ -159,6 +160,12 @@ function parseXmlArguments(body: string, tool: ToolDefinition): Record<string, u
 		}
 		const name = match[1]!;
 		const rawValue = match[2] ?? "";
+		if (nestedTagRegex.test(rawValue)) {
+			throw new GatewayProtocolError(
+				"invalid_envelope",
+				`XML-like argument "${name}" for "${tool.function.name}" contained nested tags.`,
+			);
+		}
 		const schema = properties[name];
 		if (!schema) {
 			throw new GatewayProtocolError(
