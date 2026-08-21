@@ -16,11 +16,12 @@ const EN_BASE = `API backend serialization mode (${GW_PROTOCOL_VERSION}):
 - Never claim an external action ran unless a real <tool_result> was provided.
 - After emitting a tool_call request, wait for the real tool result before continuing.
 - A tool_call envelope may include optional content for user-visible progress. It may include reasoning_content only when a separate reasoning field is already naturally available; never fabricate reasoning metadata.
+- When no further external action is needed, return a message envelope whose content contains the complete non-empty final or conversational response. Never terminate with an empty message.
 - Every response while the external action catalog is enabled MUST contain exactly one protocol envelope and no text outside it.
 
 Allowed envelopes:
 ${GW_JSON_START}
-{"type":"message","content":"final or conversational response"}
+{"type":"message","content":"complete non-empty final or conversational response"}
 ${GW_JSON_END}
 
 ${GW_JSON_START}
@@ -41,11 +42,12 @@ const CN_BASE = `API 后端序列化模式 (${GW_PROTOCOL_VERSION}):
 - 除非收到真实的 <tool_result>，否则不要声称外部动作已经执行。
 - 输出 tool_call 请求后，必须等待真实工具结果后再继续。
 - tool_call envelope 可以包含可选 content，用于用户可见的进度说明。只有运行时本身已经自然提供独立 reasoning 字段时才可包含 reasoning_content；不要伪造 reasoning 元数据。
+- 不再需要外部动作时，必须返回 message envelope，并在 content 中给出完整且非空的最终或对话回复。不要用空 message 结束。
 - 启用外部动作目录时，每次回复必须且只能包含一个协议 envelope，envelope 外不能有文字。
 
 允许的 envelope:
 ${GW_JSON_START}
-{"type":"message","content":"最终或对话回复"}
+{"type":"message","content":"完整且非空的最终或对话回复"}
 ${GW_JSON_END}
 
 ${GW_JSON_START}
@@ -92,7 +94,7 @@ export function buildProtocolRepairPrompt(
 ): string {
 	const previous = boundedPreviousOutput(previousOutput);
 	if (lang === "cn") {
-		return `${GW_PROTOCOL_VERSION} 修复请求。\n上一条模型回复未满足协议：${problem}\n不要重新分析任务，不要选择新的动作，也不要改变原意。只把上一条回复重新编码成一个有效的 GW_JSON envelope。\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\n只返回 ${GW_JSON_START} ... ${GW_JSON_END}。`;
+		return `${GW_PROTOCOL_VERSION} 修复请求。\n上一条模型回复未满足协议：${problem}\n不要重新分析任务，不要选择新的动作，也不要改变原意。只把上一条回复重新编码成一个有效的 GW_JSON envelope。若原意是最终回复，message.content 必须包含完整且非空的最终回复，绝不能返回空 message。\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\n只返回 ${GW_JSON_START} ... ${GW_JSON_END}。`;
 	}
-	return `${GW_PROTOCOL_VERSION} repair request.\nThe previous model response violated the protocol: ${problem}\nDo not re-evaluate the task, choose a different action, or intentionally change the semantics. Re-encode the previous response as exactly one valid GW_JSON envelope.\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\nReturn only ${GW_JSON_START} ... ${GW_JSON_END}.`;
+	return `${GW_PROTOCOL_VERSION} repair request.\nThe previous model response violated the protocol: ${problem}\nDo not re-evaluate the task, choose a different action, or intentionally change the semantics. Re-encode the previous response as exactly one valid GW_JSON envelope. If the intended response is terminal, message.content MUST contain the complete non-empty final answer; never return an empty message.\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\nReturn only ${GW_JSON_START} ... ${GW_JSON_END}.`;
 }
