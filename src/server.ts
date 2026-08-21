@@ -133,7 +133,9 @@ function logOpenCodeHeaders(req: Request): void {
 			return value ? `${name}=${value}` : undefined;
 		})
 		.filter((value): value is string => Boolean(value));
-	console.log(`[request-headers] ${values.length > 0 ? values.join(" ") : "no-opencode-session-headers"}`);
+	console.log(
+		`[request-headers] ${values.length > 0 ? values.join(" ") : "no-opencode-session-headers"}`,
+	);
 }
 
 async function handleChatCompletionsRoute(req: Request): Promise<Response> {
