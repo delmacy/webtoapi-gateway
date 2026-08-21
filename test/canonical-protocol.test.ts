@@ -12,6 +12,7 @@ import {
 	GW_JSON_END,
 	GW_JSON_START,
 } from "../src/protocol/types.ts";
+import { parseToolResponse } from "../src/tool-calling/converter.ts";
 
 const EXEC_TOOL: ToolDefinition = {
 	type: "function",
@@ -123,6 +124,25 @@ describe("canonical tool calls", () => {
 			command: "ls",
 			timeout: 30,
 		});
+	});
+
+	test("strict converter canonicalizes exactly one valid envelope with surrounding prose", () => {
+		const text = `I will check now.\n${envelope({
+			type: "tool_call",
+			calls: [{ name: "exec", arguments: { command: "pwd" } }],
+		})}\nWaiting for the real result.`;
+		const result = parseToolResponse(text, [EXEC_TOOL], true);
+		expect(result.finishReason).toBe("tool_calls");
+		expect(result.toolCalls).toHaveLength(1);
+		expect(result.toolCalls?.[0]?.function.name).toBe("exec");
+	});
+
+	test("canonicalized trailing prose does not bypass semantic validation", () => {
+		const text = `noise\n${envelope({
+			type: "tool_call",
+			calls: [{ name: "delete_everything", arguments: {} }],
+		})}\nmore noise`;
+		expectProtocolError(() => parseToolResponse(text, [EXEC_TOOL], true), "unknown_tool");
 	});
 
 	test("preserves progress content and reasoning alongside tool calls", () => {
