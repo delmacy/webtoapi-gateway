@@ -151,6 +151,21 @@ function resolveSessionIdOverride(req: Request): string | undefined {
 	);
 }
 
+function hasAgentToolContext(body: any): boolean {
+	if (Array.isArray(body?.tools) && body.tools.length > 0) return true;
+	if (!Array.isArray(body?.messages)) return false;
+	return body.messages.some((message: any) => {
+		if (message?.role === "tool" || message?.role === "function") return true;
+		return message?.role === "assistant" && Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+	});
+}
+
+function resolveOpenCodeAffinity(req: Request, body: any): string | undefined {
+	const session = resolveSessionIdOverride(req);
+	if (!session) return undefined;
+	return `${session}:${hasAgentToolContext(body) ? "agent" : "aux"}`;
+}
+
 async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 	logOpenCodeHeaders(req);
 
@@ -178,7 +193,7 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 	}
 
 	return handleChatCompletions(body, provider, {
-		sessionIdOverride: resolveSessionIdOverride(req),
+		sessionIdOverride: resolveOpenCodeAffinity(req, body),
 	});
 }
 
