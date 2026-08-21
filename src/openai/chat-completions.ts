@@ -1,9 +1,6 @@
 import { type FairUsePolicy, fairUseGovernor } from "../agent/governor.ts";
 import { type AgentMode, type AgentRuntimeConfig, agentRuntime } from "../agent/runtime.ts";
-import {
-	GatewayProtocolError,
-	type GatewayProtocolErrorCode,
-} from "../protocol/types.ts";
+import { GatewayProtocolError, type GatewayProtocolErrorCode } from "../protocol/types.ts";
 import { evictProviderClient } from "../providers/registry.ts";
 import type { ProviderSendParams, WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
@@ -214,9 +211,7 @@ async function parseToolResponseWithRepair(
 	} catch (err) {
 		if (!isRepairableProtocolError(err)) throw err;
 
-		console.warn(
-			`[chat-completions] protocol repair requested: ${err.code}: ${err.message}`,
-		);
+		console.warn(`[chat-completions] protocol repair requested: ${err.code}: ${err.message}`);
 		releaseInitialLease();
 		const repairRelease =
 			_agentMode === "optimized"
@@ -233,11 +228,7 @@ async function parseToolResponseWithRepair(
 				protocolRepairSendParams(model, repairPrompt, execution),
 			);
 			const repairResult = await client.parseStream(repairStream);
-			const parsed = parseToolResponse(
-				repairResult.text,
-				body.tools,
-				_agentMode === "optimized",
-			);
+			const parsed = parseToolResponse(repairResult.text, body.tools, _agentMode === "optimized");
 			console.log(`[chat-completions] protocol repair succeeded after ${err.code}`);
 			return { parsed, rawText: repairResult.text };
 		} finally {
