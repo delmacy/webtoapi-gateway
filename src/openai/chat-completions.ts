@@ -205,7 +205,12 @@ async function parseToolResponseWithRepair(
 ): Promise<ParsedWithRaw> {
 	try {
 		return {
-			parsed: parseToolResponse(rawText, body.tools, _agentMode === "optimized"),
+			parsed: parseToolResponse(
+				rawText,
+				body.tools,
+				_agentMode === "optimized",
+				body.stream !== true,
+			),
 			rawText,
 		};
 	} catch (err) {
