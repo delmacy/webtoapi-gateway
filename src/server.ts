@@ -38,7 +38,7 @@ const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 	"Access-Control-Allow-Headers":
-		"Content-Type, Authorization, X-WebToAPI-Session-Id, X-OpenCode-Session",
+		"Content-Type, Authorization, X-WebToAPI-Session-Id, X-OpenCode-Session, X-Session-Id, X-Session-Affinity, X-Parent-Session-Id",
 };
 
 function withCors(res: Response): Response {
@@ -125,6 +125,9 @@ function logOpenCodeHeaders(req: Request): void {
 		"x-opencode-project",
 		"x-opencode-client",
 		"x-webtoapi-session-id",
+		"x-session-affinity",
+		"x-session-id",
+		"x-parent-session-id",
 		"user-agent",
 	];
 	const values = interesting
@@ -135,6 +138,16 @@ function logOpenCodeHeaders(req: Request): void {
 		.filter((value): value is string => Boolean(value));
 	console.log(
 		`[request-headers] ${values.length > 0 ? values.join(" ") : "no-opencode-session-headers"}`,
+	);
+}
+
+function resolveSessionIdOverride(req: Request): string | undefined {
+	return (
+		req.headers.get("x-webtoapi-session-id")?.trim() ||
+		req.headers.get("x-opencode-session")?.trim() ||
+		req.headers.get("x-session-affinity")?.trim() ||
+		req.headers.get("x-session-id")?.trim() ||
+		undefined
 	);
 }
 
@@ -164,11 +177,9 @@ async function handleChatCompletionsRoute(req: Request): Promise<Response> {
 		);
 	}
 
-	const sessionIdOverride =
-		req.headers.get("x-webtoapi-session-id")?.trim() ||
-		req.headers.get("x-opencode-session")?.trim() ||
-		undefined;
-	return handleChatCompletions(body, provider, { sessionIdOverride });
+	return handleChatCompletions(body, provider, {
+		sessionIdOverride: resolveSessionIdOverride(req),
+	});
 }
 
 async function handleModelsRoute(): Promise<Response> {
