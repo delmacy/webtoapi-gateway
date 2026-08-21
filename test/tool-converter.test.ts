@@ -86,13 +86,13 @@ describe("buildPromptFromMessages", () => {
 		expect(hasTools).toBe(false);
 	});
 
-	test("optimized prompt injects canonical protocol and tool definitions", () => {
+	test("optimized prompt injects canonical protocol and action definitions", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
 		const { prompt, hasTools } = buildPromptFromMessages(messages, TOOLS);
 		expect(hasTools).toBe(true);
 		expect(prompt).toContain("GW_AGENT_PROTOCOL/1");
 		expect(prompt).toContain("<<<GW_JSON>>>");
-		expect(prompt).toContain("Available tools:");
+		expect(prompt).toContain("External action catalog:");
 		expect(prompt).toContain('"exec"');
 		expect(prompt).toContain('"read"');
 		expect(prompt).not.toContain("```tool_json");
@@ -110,14 +110,14 @@ describe("buildPromptFromMessages", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
 		const { prompt, hasTools } = buildPromptFromMessages(messages, TOOLS, "none");
 		expect(hasTools).toBe(false);
-		expect(prompt).not.toContain("Available tools:");
+		expect(prompt).not.toContain("External action catalog:");
 	});
 
 	test("tool_choice required adds canonical force hint", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "List files" }];
 		const { prompt, hasTools } = buildPromptFromMessages(messages, TOOLS, "required");
 		expect(hasTools).toBe(true);
-		expect(prompt).toContain("MUST call one of the available tools");
+		expect(prompt).toContain("MUST serialize one external action request");
 	});
 
 	test("tool_choice specific function filters tools", () => {
@@ -187,7 +187,7 @@ describe("buildPromptFromMessages", () => {
 	test("detects Chinese language and uses CN prompt", () => {
 		const messages: ChatMessage[] = [{ role: "user", content: "列出当前目录的文件" }];
 		const { prompt } = buildPromptFromMessages(messages, TOOLS);
-		expect(prompt).toContain("可用工具:");
+		expect(prompt).toContain("外部动作目录:");
 		expect(prompt).toContain("GW_AGENT_PROTOCOL/1");
 	});
 

@@ -4,7 +4,13 @@
  */
 
 import { getCredentials } from "./auth-store.ts";
-import type { ModelInfo, ProviderDefinition, WebProviderClient } from "./types.ts";
+import { SessionScopedProviderClient } from "./session-scoped-client.ts";
+import type {
+	ModelInfo,
+	ProviderDefinition,
+	ProviderSessionCapabilities,
+	WebProviderClient,
+} from "./types.ts";
 
 // Lazy-loaded provider definitions to avoid importing all providers at startup
 let _definitions: ProviderDefinition[] | null = null;
@@ -62,6 +68,29 @@ async function loadDefinitions(): Promise<ProviderDefinition[]> {
 
 const clientCache = new Map<string, WebProviderClient>();
 
+const SESSION_SCOPED_CAPABILITIES: Record<string, ProviderSessionCapabilities> = {
+	"deepseek-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
+	"chatgpt-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
+	"qwen-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
+	"kimi-web": {
+		persistentConversation: true,
+		deltaPrompts: true,
+		resettable: true,
+	},
+};
+
 /**
  * Evict a cached provider client so the next `getProviderClient` call
  * re-reads credentials from disk and creates a fresh instance.
@@ -90,7 +119,10 @@ export async function getProviderClient(providerId: string): Promise<WebProvider
 	const def = defs.find((d) => d.id === providerId);
 	if (!def) return null;
 
-	const client = def.factory(creds);
+	const sessionCapabilities = SESSION_SCOPED_CAPABILITIES[providerId];
+	const client = sessionCapabilities
+		? new SessionScopedProviderClient(def.id, def.models, creds, def.factory, sessionCapabilities)
+		: def.factory(creds);
 	await client.init();
 	clientCache.set(providerId, client);
 	return client;

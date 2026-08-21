@@ -8,7 +8,13 @@ export interface ChatCompletionRequest {
 	stream?: boolean;
 	temperature?: number;
 	max_tokens?: number;
+	/** OpenAI-compatible reasoning control observed from agent harnesses. */
+	reasoning_effort?: string;
+	/** Whether the client permits more than one tool request in one assistant turn. */
+	parallel_tool_calls?: boolean;
 	user?: string;
+	/** Gateway extension for explicit logical session affinity across requests. */
+	webtoapi_session_id?: string;
 }
 
 export type ChatMessage = SystemMessage | UserMessage | AssistantMessage | ToolMessage;
@@ -26,6 +32,8 @@ export interface UserMessage {
 export interface AssistantMessage {
 	role: "assistant";
 	content?: string | null;
+	/** Optional provider reasoning metadata. Never synthesize this when the provider does not expose it. */
+	reasoning_content?: string | null;
 	tool_calls?: ToolCallOutput[];
 }
 
@@ -77,6 +85,8 @@ export interface ChatCompletionChoice {
 export interface ResponseMessage {
 	role: "assistant";
 	content: string | null;
+	/** Optional provider reasoning metadata, compatible with clients such as OpenCode. */
+	reasoning_content?: string;
 	tool_calls?: ToolCallOutput[];
 }
 
@@ -114,6 +124,8 @@ export interface ChunkChoice {
 export interface ChunkDelta {
 	role?: "assistant";
 	content?: string | null;
+	/** Optional provider reasoning metadata. */
+	reasoning_content?: string;
 	tool_calls?: ToolCallDelta[];
 }
 

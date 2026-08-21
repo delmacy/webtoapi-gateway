@@ -1,0 +1,1 @@
+Qwen stateful execution is intentionally fail-closed: if the adapter cannot observe the new assistant message ID from `/api/v2/chats/{chatId}/` after a completion, it returns an error rather than pretending the continuation is safely attached to the upstream thread.

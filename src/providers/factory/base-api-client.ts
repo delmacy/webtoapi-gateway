@@ -4,7 +4,7 @@ import { throwIfSessionExpired } from "../shared/error-guard.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import { ensurePage } from "../shared/page-lifecycle.ts";
 import { textToStream } from "../shared/stream-helpers.ts";
-import type { ModelInfo, StreamResult, WebProviderClient } from "../types.ts";
+import type { ModelInfo, ProviderSendParams, StreamResult, WebProviderClient } from "../types.ts";
 import { ProviderApiError } from "../types.ts";
 import type { ApiClientConfig, NormalizedSendParams } from "./types.ts";
 
@@ -50,18 +50,17 @@ export abstract class BaseApiClient<TAuth = unknown> implements WebProviderClien
 		await this.onInit();
 	}
 
-	async sendMessage(params: {
-		message: string;
-		model?: string;
-		signal?: AbortSignal;
-		sessionId?: string;
-	}): Promise<ReadableStream<Uint8Array>> {
+	async sendMessage(params: ProviderSendParams): Promise<ReadableStream<Uint8Array>> {
 		const page = await this.getPage();
 		const normalized: NormalizedSendParams = {
 			message: params.message,
 			model: params.model || this.config.defaultModel,
 			signal: params.signal,
 			sessionId: params.sessionId,
+			sessionEpoch: params.sessionEpoch,
+			resetSession: params.resetSession,
+			statefulSession: params.statefulSession,
+			rehydrationMessage: params.rehydrationMessage,
 		};
 
 		try {
