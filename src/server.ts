@@ -156,7 +156,11 @@ function hasAgentToolContext(body: any): boolean {
 	if (!Array.isArray(body?.messages)) return false;
 	return body.messages.some((message: any) => {
 		if (message?.role === "tool" || message?.role === "function") return true;
-		return message?.role === "assistant" && Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+		return (
+			message?.role === "assistant" &&
+			Array.isArray(message?.tool_calls) &&
+			message.tool_calls.length > 0
+		);
 	});
 }
 
