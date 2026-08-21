@@ -1,6 +1,6 @@
-import { parseCanonicalToolResponse, type CanonicalToolResponse } from "./parser.ts";
-import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "./types.ts";
 import type { ToolDefinition } from "../openai/types.ts";
+import { type CanonicalToolResponse, parseCanonicalToolResponse } from "./parser.ts";
+import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "./types.ts";
 
 export type RawNormalizationMode =
 	| "exact-envelope"
