@@ -40,7 +40,11 @@ type Hooks = {
 		output: { context: string[]; prompt?: string },
 	) => Promise<void> | void;
 	"experimental.compaction.autocontinue"?: (
-		input: { sessionID: string; model: { providerID?: string }; provider: { info?: { id?: string } } },
+		input: {
+			sessionID: string;
+			model: { providerID?: string };
+			provider: { info?: { id?: string } };
+		},
 		output: { enabled: boolean },
 	) => Promise<void> | void;
 };
@@ -72,10 +76,13 @@ const COMPACTION_CONTEXT = `When compacting this OpenCode session, preserve a du
 9. any IDs or relationships needed to correlate parent/subagent work.
 Do not turn an unfinished task into a completed one during compaction. Prefer a concise operational checkpoint over narrative history.`;
 
-function isWebToAPI(input: {
-	model?: { providerID?: string };
-	provider?: { info?: { id?: string } };
-}, providerID: string): boolean {
+function isWebToAPI(
+	input: {
+		model?: { providerID?: string };
+		provider?: { info?: { id?: string } };
+	},
+	providerID: string,
+): boolean {
 	return input.model?.providerID === providerID || input.provider?.info?.id === providerID;
 }
 
@@ -131,7 +138,9 @@ export default async function webToAPIOpenCodePlugin(
 
 		"experimental.chat.system.transform"(input, output) {
 			if (input.model.providerID !== providerID) return;
-			if (!output.system.some((item) => item.includes("WebToAPI/OpenCode durable execution rules:"))) {
+			if (
+				!output.system.some((item) => item.includes("WebToAPI/OpenCode durable execution rules:"))
+			) {
 				output.system.push(DURABLE_SYSTEM);
 			}
 		},
