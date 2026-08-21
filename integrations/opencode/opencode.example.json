@@ -1,0 +1,49 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "./integrations/opencode/plugin.ts",
+      {
+        "baseURL": "http://127.0.0.1:3456/v1",
+        "compaction": true,
+        "prune": true,
+        "tailTurns": 15
+      }
+    ]
+  ],
+  "default_agent": "web-build",
+  "agent": {
+    "web-build": {
+      "description": "Durable autonomous repository executor through WebToAPI Gateway",
+      "mode": "primary",
+      "model": "webtoapi/qwen3.5-plus",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "todowrite": "allow",
+        "lsp": "allow",
+        "task": "allow",
+        "question": "allow",
+        "webfetch": "ask",
+        "websearch": "ask",
+        "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git branch*": "allow",
+          "git rev-parse*": "allow",
+          "bun test*": "allow",
+          "bun x tsc*": "allow",
+          "npm test*": "allow",
+          "npm run test*": "allow",
+          "npm run lint*": "allow",
+          "npm run typecheck*": "allow"
+        }
+      }
+    }
+  }
+}
