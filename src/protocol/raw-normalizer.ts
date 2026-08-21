@@ -107,17 +107,10 @@ function debugEnabled(): boolean {
 	return process.env.WEBTOAPI_PROTOCOL_DEBUG === "1";
 }
 
-function sanitizeDebugPreview(text: string): string {
-	return text
-		.replace(/\r/g, "\\r")
-		.replace(/\n/g, "\\n")
-		.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "?");
-}
-
 function logProtocolFailure(error: GatewayProtocolError, raw: string): void {
 	if (!debugEnabled()) return;
-	const start = sanitizeDebugPreview(raw.slice(0, DEBUG_PREVIEW_CHARS));
-	const end = sanitizeDebugPreview(raw.slice(-DEBUG_PREVIEW_CHARS));
+	const start = raw.slice(0, DEBUG_PREVIEW_CHARS);
+	const end = raw.slice(-DEBUG_PREVIEW_CHARS);
 	console.warn(
 		`[protocol-debug] code=${error.code} chars=${raw.length} start=${JSON.stringify(start)} end=${JSON.stringify(end)}`,
 	);
