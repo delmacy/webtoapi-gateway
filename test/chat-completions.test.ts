@@ -237,9 +237,9 @@ describe("chat completions response format", () => {
 		expect(json.error.code).toBe("invalid_envelope");
 	}, 8000);
 
-	test("malformed optimized tool stream returns HTTP 502 before SSE", async () => {
+	test("malformed structured tool stream returns HTTP 502 before SSE", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const mockClient = createMockClient("plain text instead of protocol envelope");
+		const mockClient = createMockClient('<<<GW_JSON>>>\n{"type":"tool_call","calls":"broken"}\n<<<END_GW_JSON>>>');
 		const body: ChatCompletionRequest = {
 			model: "test",
 			stream: true,
