@@ -185,7 +185,11 @@ export function buildPromptFromMessages(
 	return { prompt: parts.join("\n\n"), hasTools };
 }
 
-function parseStrictToolResponse(text: string, requestedTools?: ToolDefinition[]) {
+function parseStrictToolResponse(
+	text: string,
+	requestedTools: ToolDefinition[] | undefined,
+	allowTerminalProse: boolean,
+) {
 	try {
 		const normalized = normalizeRawProtocolResponse(text, requestedTools);
 		if (normalized.mode !== "exact-envelope") {
@@ -194,6 +198,7 @@ function parseStrictToolResponse(text: string, requestedTools?: ToolDefinition[]
 		return normalized.parsed;
 	} catch (error) {
 		if (
+			allowTerminalProse &&
 			error instanceof GatewayProtocolError &&
 			error.code === "missing_envelope" &&
 			text.trim().length > 0
@@ -213,21 +218,23 @@ function parseStrictToolResponse(text: string, requestedTools?: ToolDefinition[]
 /**
  * Parse text response and detect tool calls.
  * Strict mode still requires canonical GW_AGENT_PROTOCOL semantics for actions, but accepts
- * deterministic syntactic recovery from raw provider output before validation. Plain terminal
- * prose is preserved as a message without asking the provider to infer the task again.
+ * deterministic syntactic recovery from raw provider output before validation. Non-streaming
+ * callers may preserve plain terminal prose as a message without asking the provider to infer
+ * the task again. Streaming tool responses remain fail-closed before SSE starts.
  * Natural-language intent is never inferred into an action.
  */
 export function parseToolResponse(
 	text: string,
 	requestedTools?: ToolDefinition[],
 	strictProtocol = false,
+	allowTerminalProse = false,
 ): {
 	content: string | null;
 	reasoningContent?: string;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 } {
-	if (strictProtocol) return parseStrictToolResponse(text, requestedTools);
+	if (strictProtocol) return parseStrictToolResponse(text, requestedTools, allowTerminalProse);
 
 	if (!requestedTools || requestedTools.length === 0 || !hasToolCall(text)) {
 		return {
