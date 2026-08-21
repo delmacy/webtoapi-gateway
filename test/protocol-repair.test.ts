@@ -42,7 +42,7 @@ function createSequenceClient(responses: string[]) {
 				start(controller) {
 					controller.enqueue(encoder.encode(`data: ${sseData}\n\n`));
 					controller.close();
-			},
+				},
 			});
 		},
 		parseStream: async (body: ReadableStream<Uint8Array>, onDelta?: (d: string) => void) =>
@@ -52,12 +52,12 @@ function createSequenceClient(responses: string[]) {
 }
 
 describe("single protocol repair", () => {
-	test("canonicalizes a serialization-only trailing_content failure without a second inference", async () => {
+	test("repairs a serialization-only trailing_content failure once", async () => {
 		const intended = canonical({
 			type: "tool_call",
 			calls: [{ name: "exec", arguments: { command: "ls" } }],
 		});
-		const client = createSequenceClient([`${intended}\nextra prose`]);
+		const client = createSequenceClient([`${intended}\nextra prose`, intended]);
 		const body: ChatCompletionRequest = {
 			model: "test-model",
 			messages: [{ role: "user", content: "List files" }],
