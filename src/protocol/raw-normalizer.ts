@@ -19,10 +19,6 @@ function wrapJson(raw: string): string {
 	return `${GW_JSON_START}\n${raw.trim()}\n${GW_JSON_END}`;
 }
 
-function unique<T>(values: T[]): T[] {
-	return [...new Set(values)];
-}
-
 function extractSingleEnvelope(text: string): string | undefined {
 	const start = text.indexOf(GW_JSON_START);
 	const end = text.indexOf(GW_JSON_END, start + GW_JSON_START.length);
@@ -39,7 +35,7 @@ function extractFencedJson(text: string): string[] {
 		const body = match[1]?.trim();
 		if (body) matches.push(body);
 	}
-	return unique(matches);
+	return matches;
 }
 
 function extractBalancedObjects(text: string): string[] {
@@ -80,7 +76,7 @@ function extractBalancedObjects(text: string): string[] {
 			}
 		}
 	}
-	return unique(results);
+	return results;
 }
 
 function parsesAsJsonObject(raw: string): boolean {
