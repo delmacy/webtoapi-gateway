@@ -188,7 +188,7 @@ export function buildPromptFromMessages(
 function parseStrictToolResponse(
 	text: string,
 	requestedTools: ToolDefinition[] | undefined,
-	allowTerminalProse: boolean,
+	_allowTerminalProse: boolean,
 ) {
 	try {
 		const normalized = normalizeRawProtocolResponse(text, requestedTools);
@@ -198,7 +198,6 @@ function parseStrictToolResponse(
 		return normalized.parsed;
 	} catch (error) {
 		if (
-			allowTerminalProse &&
 			error instanceof GatewayProtocolError &&
 			error.code === "missing_envelope" &&
 			text.trim().length > 0
@@ -218,9 +217,9 @@ function parseStrictToolResponse(
 /**
  * Parse text response and detect tool calls.
  * Strict mode still requires canonical GW_AGENT_PROTOCOL semantics for actions, but accepts
- * deterministic syntactic recovery from raw provider output before validation. Non-streaming
- * callers may preserve plain terminal prose as a message without asking the provider to infer
- * the task again. Streaming tool responses remain fail-closed before SSE starts.
+ * deterministic syntactic recovery from raw provider output before validation. Plain terminal
+ * prose is preserved as a message for both streaming and non-streaming callers without asking
+ * the provider to infer the task again. Malformed structured protocol still fails closed.
  * Natural-language intent is never inferred into an action.
  */
 export function parseToolResponse(
