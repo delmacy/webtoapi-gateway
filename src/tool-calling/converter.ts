@@ -165,7 +165,8 @@ export function buildPromptFromMessages(
 	const parts: string[] = [];
 	const lang = detectLang(messages);
 
-	if (hasTools) parts.push(buildToolPrompt(effective.tools, lang, effective.forceUse, compactTools));
+	if (hasTools)
+		parts.push(buildToolPrompt(effective.tools, lang, effective.forceUse, compactTools));
 	for (const msg of messages) {
 		const formatted = formatMessage(msg, compactTools);
 		if (formatted) parts.push(formatted);
