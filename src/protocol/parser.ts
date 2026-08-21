@@ -122,6 +122,12 @@ export function parseGatewayEnvelope(text: string): GatewayEnvelope {
 			if (typeof decoded.content !== "string") {
 				throw new GatewayProtocolError("invalid_envelope", "message.content must be a string.");
 			}
+			if (decoded.content.trim().length === 0) {
+				throw new GatewayProtocolError(
+					"invalid_envelope",
+					"message.content must contain a non-empty terminal or conversational response.",
+				);
+			}
 			const reasoningContent = optionalString(decoded, "reasoning_content");
 			return {
 				type: "message",
