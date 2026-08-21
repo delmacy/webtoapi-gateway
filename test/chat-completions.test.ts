@@ -239,7 +239,9 @@ describe("chat completions response format", () => {
 
 	test("malformed structured tool stream returns HTTP 502 before SSE", async () => {
 		const { handleChatCompletions } = await import("../src/openai/chat-completions.ts");
-		const mockClient = createMockClient('<<<GW_JSON>>>\n{"type":"tool_call","calls":"broken"}\n<<<END_GW_JSON>>>');
+		const mockClient = createMockClient(
+			'<<<GW_JSON>>>\n{"type":"tool_call","calls":"broken"}\n<<<END_GW_JSON>>>',
+		);
 		const body: ChatCompletionRequest = {
 			model: "test",
 			stream: true,
