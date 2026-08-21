@@ -1,6 +1,9 @@
 import { type FairUsePolicy, fairUseGovernor } from "../agent/governor.ts";
 import { type AgentMode, type AgentRuntimeConfig, agentRuntime } from "../agent/runtime.ts";
-import { GatewayProtocolError } from "../protocol/types.ts";
+import {
+	GatewayProtocolError,
+	type GatewayProtocolErrorCode,
+} from "../protocol/types.ts";
 import { evictProviderClient } from "../providers/registry.ts";
 import type { ProviderSendParams, WebProviderClient } from "../providers/types.ts";
 import { ProviderApiError, SessionExpiredError } from "../providers/types.ts";
@@ -22,6 +25,14 @@ import type {
 let _routeTimeoutMs = 300_000;
 let _fairUsePolicy: FairUsePolicy = { maxConcurrency: 1, minIntervalMs: 2500 };
 let _agentMode: AgentMode = "optimized";
+
+const REPAIRABLE_PROTOCOL_ERRORS = new Set<GatewayProtocolErrorCode>([
+	"missing_envelope",
+	"multiple_envelopes",
+	"trailing_content",
+	"invalid_json",
+	"invalid_envelope",
+]);
 
 export interface ChatCompletionHandlerOptions {
 	sessionIdOverride?: string;
@@ -53,6 +64,11 @@ type AgentHeaderContext = {
 	promptMode?: string;
 	stateful?: boolean;
 	cache?: "hit" | "miss" | "disabled";
+};
+
+type ParsedWithRaw = {
+	parsed: ParsedToolResponse;
+	rawText: string;
 };
 
 export function setRouteTimeoutSec(sec: number): void {
@@ -133,6 +149,22 @@ function providerSendParams(
 	};
 }
 
+function protocolRepairSendParams(
+	model: string,
+	prompt: string,
+	execution: ExecutionContext,
+): ProviderSendParams {
+	return {
+		message: prompt,
+		model,
+		signal: execution.signal,
+		statefulSession: execution.plan.statefulSession,
+		sessionId: execution.plan.statefulSession ? execution.sessionId : undefined,
+		sessionEpoch: execution.plan.statefulSession ? execution.sessionEpoch : undefined,
+		resetSession: false,
+	};
+}
+
 function cachedParsed(response: CachedAgentResponse): ParsedToolResponse {
 	return {
 		content: response.content,
@@ -140,6 +172,78 @@ function cachedParsed(response: CachedAgentResponse): ParsedToolResponse {
 		toolCalls: response.toolCalls,
 		finishReason: response.finishReason,
 	};
+}
+
+function isRepairableProtocolError(err: unknown): err is GatewayProtocolError {
+	return err instanceof GatewayProtocolError && REPAIRABLE_PROTOCOL_ERRORS.has(err.code);
+}
+
+function buildProtocolRepairPrompt(
+	originalPrompt: string,
+	invalidText: string,
+	error: GatewayProtocolError,
+	stateful: boolean,
+): string {
+	const repairInstruction = [
+		"Your previous response violated GW_AGENT_PROTOCOL/1.",
+		`Protocol error: ${error.code}.`,
+		"Re-emit the same intended response with serialization corrected only.",
+		"Return exactly one <<<GW_JSON>>> ... <<<END_GW_JSON>>> envelope and surrounding whitespace only.",
+		"Do not change the intended action, choose a different tool, invent tool results, or add prose outside the envelope.",
+		"If the intended response was a tool request, preserve the intended tool name(s) and arguments.",
+	].join("\n");
+	const invalid = `\n\n<previous_invalid_response>\n${invalidText}\n</previous_invalid_response>`;
+	if (stateful) return `${repairInstruction}${invalid}`;
+	return `${originalPrompt}\n\n--- PROTOCOL REPAIR ---\n${repairInstruction}${invalid}`;
+}
+
+async function parseToolResponseWithRepair(
+	rawText: string,
+	model: string,
+	originalPrompt: string,
+	body: ChatCompletionRequest,
+	client: WebProviderClient,
+	execution: ExecutionContext,
+	releaseInitialLease: () => void,
+): Promise<ParsedWithRaw> {
+	try {
+		return {
+			parsed: parseToolResponse(rawText, body.tools, _agentMode === "optimized"),
+			rawText,
+		};
+	} catch (err) {
+		if (!isRepairableProtocolError(err)) throw err;
+
+		console.warn(
+			`[chat-completions] protocol repair requested: ${err.code}: ${err.message}`,
+		);
+		releaseInitialLease();
+		const repairRelease =
+			_agentMode === "optimized"
+				? await fairUseGovernor.acquire(client.providerId, _fairUsePolicy)
+				: () => {};
+		try {
+			const repairPrompt = buildProtocolRepairPrompt(
+				originalPrompt,
+				rawText,
+				err,
+				execution.plan.statefulSession,
+			);
+			const repairStream = await client.sendMessage(
+				protocolRepairSendParams(model, repairPrompt, execution),
+			);
+			const repairResult = await client.parseStream(repairStream);
+			const parsed = parseToolResponse(
+				repairResult.text,
+				body.tools,
+				_agentMode === "optimized",
+			);
+			console.log(`[chat-completions] protocol repair succeeded after ${err.code}`);
+			return { parsed, rawText: repairResult.text };
+		} finally {
+			repairRelease();
+		}
+	}
 }
 
 export async function handleChatCompletions(
@@ -262,13 +366,24 @@ async function handleNonStreaming(
 	try {
 		const stream = await client.sendMessage(providerSendParams(model, prompt, execution));
 		const result = await client.parseStream(stream);
-		const parsed = hasTools
-			? parseToolResponse(result.text, body.tools, _agentMode === "optimized")
+		const parsedWithRaw = hasTools
+			? await parseToolResponseWithRepair(
+					result.text,
+					model,
+					prompt,
+					body,
+					client,
+					execution,
+					release,
+				)
 			: {
-					content: result.text,
-					reasoningContent: undefined,
-					toolCalls: undefined,
-					finishReason: "stop" as const,
+					parsed: {
+						content: result.text,
+						reasoningContent: undefined,
+						toolCalls: undefined,
+						finishReason: "stop" as const,
+					},
+					rawText: result.text,
 				};
 		if (execution.cacheEnabled) {
 			agentResponseCache.set(
@@ -276,13 +391,15 @@ async function handleNonStreaming(
 				execution.sessionId,
 				execution.requestFingerprint,
 				{
-					...parsed,
-					rawText: result.text,
+					...parsedWithRaw.parsed,
+					rawText: parsedWithRaw.rawText,
 					promptText: prompt,
 				},
 			);
 		}
-		return Response.json(buildCompletionResponse(id, model, parsed, prompt, result.text));
+		return Response.json(
+			buildCompletionResponse(id, model, parsedWithRaw.parsed, prompt, parsedWithRaw.rawText),
+		);
 	} catch (err) {
 		return providerErrorResponse(err, "non-streaming");
 	} finally {
@@ -365,7 +482,16 @@ async function handleStreaming(
 	if (hasTools) {
 		try {
 			const result = await client.parseStream(providerStream);
-			bufferedToolResponse = parseToolResponse(result.text, body.tools, _agentMode === "optimized");
+			const parsedWithRaw = await parseToolResponseWithRepair(
+				result.text,
+				model,
+				prompt,
+				body,
+				client,
+				execution,
+				release,
+			);
+			bufferedToolResponse = parsedWithRaw.parsed;
 			if (execution.cacheEnabled) {
 				agentResponseCache.set(
 					execution.providerId,
@@ -373,7 +499,7 @@ async function handleStreaming(
 					execution.requestFingerprint,
 					{
 						...bufferedToolResponse,
-						rawText: result.text,
+						rawText: parsedWithRaw.rawText,
 						promptText: prompt,
 					},
 				);
