@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ChatCompletionRequest, ChatCompletionResponse } from "../src/openai/types.ts";
 import { handleChatCompletions } from "../src/openai/chat-completions.ts";
+import type { ChatCompletionRequest, ChatCompletionResponse } from "../src/openai/types.ts";
 import { GW_JSON_END, GW_JSON_START } from "../src/protocol/types.ts";
 import { parseClaudeStream } from "../src/providers/claude/stream.ts";
 
