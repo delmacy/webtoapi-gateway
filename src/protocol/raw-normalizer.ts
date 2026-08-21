@@ -7,7 +7,8 @@ export type RawNormalizationMode =
 	| "envelope-with-prose"
 	| "bare-json"
 	| "fenced-json"
-	| "embedded-json";
+	| "embedded-json"
+	| "xml-tool-calls";
 
 export interface NormalizedProtocolResponse {
 	parsed: CanonicalToolResponse;
@@ -15,7 +16,10 @@ export interface NormalizedProtocolResponse {
 	canonicalText: string;
 }
 
+type JsonSchema = Record<string, unknown>;
+
 const DEBUG_PREVIEW_CHARS = 800;
+const XML_NAME = "[A-Za-z_][A-Za-z0-9_.-]*";
 
 function wrapJson(raw: string): string {
 	return `${GW_JSON_START}\n${raw.trim()}\n${GW_JSON_END}`;
@@ -103,6 +107,129 @@ function parseCandidate(
 	};
 }
 
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function schemaProperties(tool: ToolDefinition): Record<string, JsonSchema> {
+	const parameters = (tool.function.parameters ?? {}) as JsonSchema;
+	if (!parameters.properties || typeof parameters.properties !== "object") return {};
+	return parameters.properties as Record<string, JsonSchema>;
+}
+
+function xmlScalarValue(raw: string, schema: JsonSchema): unknown {
+	const text = raw.trim();
+	if (schema.type === "integer") {
+		return /^-?\d+$/.test(text) ? Number(text) : text;
+	}
+	if (schema.type === "number") {
+		const value = Number(text);
+		return text !== "" && Number.isFinite(value) ? value : text;
+	}
+	if (schema.type === "boolean") {
+		if (text === "true") return true;
+		if (text === "false") return false;
+		return text;
+	}
+	if (schema.type === "array" || schema.type === "object") {
+		try {
+			return JSON.parse(text);
+		} catch {
+			return text;
+		}
+	}
+	return text;
+}
+
+function parseXmlArguments(body: string, tool: ToolDefinition): Record<string, unknown> {
+	const properties = schemaProperties(tool);
+	const argumentsObject: Record<string, unknown> = {};
+	const childRegex = new RegExp(`<(${XML_NAME})>\\s*([\\s\\S]*?)\\s*</\\1>`, "g");
+	let cursor = 0;
+	let matched = false;
+
+	for (const match of body.matchAll(childRegex)) {
+		matched = true;
+		const index = match.index ?? 0;
+		if (body.slice(cursor, index).trim() !== "") {
+			throw new GatewayProtocolError(
+				"invalid_envelope",
+				`XML-like tool call for "${tool.function.name}" contained malformed or nested argument content.`,
+			);
+		}
+		const name = match[1]!;
+		const rawValue = match[2] ?? "";
+		const schema = properties[name];
+		if (!schema) {
+			throw new GatewayProtocolError(
+				"invalid_arguments",
+				`XML-like tool call for "${tool.function.name}" contained unknown argument "${name}".`,
+			);
+		}
+		if (Object.hasOwn(argumentsObject, name)) {
+			throw new GatewayProtocolError(
+				"invalid_arguments",
+				`XML-like tool call for "${tool.function.name}" repeated argument "${name}".`,
+			);
+		}
+		argumentsObject[name] = xmlScalarValue(rawValue, schema);
+		cursor = index + match[0].length;
+	}
+
+	if (!matched || body.slice(cursor).trim() !== "") {
+		throw new GatewayProtocolError(
+			"invalid_envelope",
+			`XML-like tool call for "${tool.function.name}" was not a flat argument structure.`,
+		);
+	}
+	return argumentsObject;
+}
+
+function normalizeXmlToolCalls(
+	text: string,
+	requestedTools: ToolDefinition[] | undefined,
+): NormalizedProtocolResponse | undefined {
+	if (!requestedTools || requestedTools.length === 0) return undefined;
+	const toolMap = new Map(requestedTools.map((tool) => [tool.function.name, tool]));
+	const alternation = requestedTools.map((tool) => escapeRegex(tool.function.name)).join("|");
+	if (!alternation) return undefined;
+
+	const blockRegex = new RegExp(`<(${alternation})>\\s*([\\s\\S]*?)\\s*</\\1>`, "g");
+	const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+	let cursor = 0;
+	let outside = "";
+
+	for (const match of text.matchAll(blockRegex)) {
+		const index = match.index ?? 0;
+		outside += text.slice(cursor, index);
+		const name = match[1]!;
+		const tool = toolMap.get(name);
+		if (!tool) return undefined;
+		calls.push({ name, arguments: parseXmlArguments(match[2] ?? "", tool) });
+		cursor = index + match[0].length;
+	}
+
+	if (calls.length === 0) return undefined;
+	outside += text.slice(cursor);
+
+	const leftoverTag = outside.match(new RegExp(`<\\/?(${XML_NAME})(?:\\s[^>]*)?>`));
+	if (leftoverTag) {
+		const unknownName = leftoverTag[1] ?? "unknown";
+		if (!toolMap.has(unknownName)) {
+			throw new GatewayProtocolError(
+				"unknown_tool",
+				`XML-like output referenced unknown tool "${unknownName}".`,
+			);
+		}
+		throw new GatewayProtocolError(
+			"invalid_envelope",
+			"XML-like tool output contained an unmatched or malformed tool block.",
+		);
+	}
+
+	return parseCandidate(JSON.stringify({ type: "tool_call", calls }), requestedTools, "xml-tool-calls");
+}
+
 function debugEnabled(): boolean {
 	return process.env.WEBTOAPI_PROTOCOL_DEBUG === "1";
 }
@@ -166,14 +293,17 @@ function normalizeRawProtocolResponseInternal(
 			);
 		}
 
+		const xml = normalizeXmlToolCalls(sanitized, requestedTools);
+		if (xml) return xml;
+
 		throw strictError;
 	}
 }
 
 /**
  * Deterministically normalizes raw model output without inferring semantic intent.
- * Only already-structured protocol JSON is recovered. Natural-language tool intent
- * is never converted into an action.
+ * Only already-structured protocol JSON or exact XML-like tool blocks are recovered.
+ * Natural-language tool intent is never converted into an action.
  *
  * Set WEBTOAPI_PROTOCOL_DEBUG=1 to log bounded raw previews for final protocol
  * failures. Debug logging is opt-in because raw provider output can contain
