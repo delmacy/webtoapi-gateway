@@ -234,7 +234,11 @@ function normalizeXmlToolCalls(
 		);
 	}
 
-	return parseCandidate(JSON.stringify({ type: "tool_call", calls }), requestedTools, "xml-tool-calls");
+	return parseCandidate(
+		JSON.stringify({ type: "tool_call", calls }),
+		requestedTools,
+		"xml-tool-calls",
+	);
 }
 
 function debugEnabled(): boolean {
