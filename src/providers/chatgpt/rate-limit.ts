@@ -13,11 +13,11 @@ export function parseChatGptModelCap(errorText: string): ChatGptModelCap | null 
 		return null;
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-	const detail = (parsed as Record<string, unknown>)["detail"];
+	const detail = (parsed as Record<string, unknown>).detail;
 	if (detail === null || typeof detail !== "object" || Array.isArray(detail)) return null;
 	const record = detail as Record<string, unknown>;
-	if (record["code"] !== "model_cap_exceeded") return null;
-	const clearsIn = Number(record["clears_in"]);
+	if (record.code !== "model_cap_exceeded") return null;
+	const clearsIn = Number(record.clears_in);
 	if (!Number.isFinite(clearsIn) || clearsIn <= 0) return null;
 	return Object.freeze({
 		code: "model_cap_exceeded",
