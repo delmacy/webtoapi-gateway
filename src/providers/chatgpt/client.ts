@@ -8,9 +8,13 @@ import { parseCookieHeader } from "../shared/cookie-parser.ts";
 import { throwIfSessionExpired } from "../shared/error-guard.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import { textToStream } from "../shared/stream-helpers.ts";
-import type { ProviderSendParams, StreamResult } from "../types.ts";
-import { withTimeout } from "../types.ts";
+import { ProviderApiError, type ProviderSendParams, type StreamResult, withTimeout } from "../types.ts";
 import type { ChatGPTWebAuth } from "./auth.ts";
+import {
+	getChatGptModelCooldown,
+	parseChatGptModelCap,
+	recordChatGptModelCooldown,
+} from "./rate-limit.ts";
 import { parseChatGPTStream } from "./stream.ts";
 
 const SEND_TIMEOUT_MS = 120_000;
@@ -265,11 +269,24 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 
 	/**
 	 * Override sendMessage for custom error handling:
+	 * - 429 model_cap_exceeded → provider/model cooldown, no repeated upstream calls
 	 * - 403 → sticky isolated DOM fallback
 	 * - 401 → SessionExpiredError
-	 * - sentinelError hint
+	 * - other provider HTTP failures → ProviderApiError with original status
 	 */
 	override async sendMessage(params: ProviderSendParams): Promise<ReadableStream<Uint8Array>> {
+		const model = params.model || this.config.defaultModel;
+		const remainingCooldown = getChatGptModelCooldown(model);
+		if (remainingCooldown !== null) {
+			console.warn(
+				`[ChatGPT Web] model cap cooldown active model=${model} retry_after=${remainingCooldown}s; skipping upstream request`,
+			);
+			throw new ProviderApiError(
+				429,
+				`ChatGPT model cap exceeded for "${model}" (model_cap_exceeded). Retry after ${remainingCooldown}s.`,
+			);
+		}
+
 		if (this.forceDom) {
 			return this.chatCompletionsViaDOM({ message: params.message, signal: params.signal });
 		}
@@ -277,7 +294,7 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 		const page = await this.getPage();
 		const normalized: NormalizedSendParams = {
 			message: params.message,
-			model: params.model || this.config.defaultModel,
+			model,
 			signal: params.signal,
 			sessionId: params.sessionId,
 		};
@@ -295,10 +312,26 @@ export class ChatGPTWebClient extends BaseApiClient<ChatGPTWebAuth> {
 				responseData.status,
 				"ChatGPT authentication failed. Re-run webauth to refresh the session.",
 			);
+
+			if (responseData.status === 429) {
+				const modelCap = parseChatGptModelCap(responseData.error ?? "");
+				if (modelCap !== null) {
+					recordChatGptModelCooldown(model, modelCap.retryAfterSeconds);
+					console.warn(
+						`[ChatGPT Web] model cap exceeded model=${model} retry_after=${modelCap.retryAfterSeconds}s; cooldown opened`,
+					);
+					throw new ProviderApiError(
+						429,
+						`ChatGPT model cap exceeded for "${model}" (${modelCap.code}). Retry after ${modelCap.retryAfterSeconds}s.`,
+					);
+				}
+			}
+
 			const sentinelHint = responseData.sentinelError
 				? ` Sentinel: ${responseData.sentinelError}`
 				: " If 403 persists, check oaistatic export names in the chatgpt.com console.";
-			throw new Error(
+			throw new ProviderApiError(
+				responseData.status,
 				`ChatGPT API error ${responseData.status}: ${responseData.error?.slice(0, 200) || ""}${sentinelHint}`,
 			);
 		}
