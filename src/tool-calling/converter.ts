@@ -185,6 +185,25 @@ export function buildPromptFromMessages(
 	return { prompt: parts.join("\n\n"), hasTools };
 }
 
+function escapeStructuredIntentRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasStructuredToolIntent(text: string, requestedTools: ToolDefinition[] | undefined): boolean {
+	if (text.includes(GW_JSON_START) || text.includes(GW_JSON_END)) return true;
+	if (/"type"\s*:\s*"tool_call"/.test(text) || /"calls"\s*:/.test(text)) return true;
+	if (/"name"\s*:\s*"[^"\r\n]+"[\s\S]{0,400}"arguments"\s*:/.test(text)) return true;
+	if (/"arguments"\s*:[\s\S]{0,400}"name"\s*:\s*"[^"\r\n]+"/.test(text)) return true;
+
+	for (const tool of requestedTools ?? []) {
+		const name = escapeStructuredIntentRegex(tool.function.name);
+		const jsonName = new RegExp(`"name"\\s*:\\s*"${name}"`);
+		const xmlBlock = new RegExp(`<\\/?${name}(?:\\s[^>]*)?>`);
+		if ((jsonName.test(text) && /"arguments"\s*:/.test(text)) || xmlBlock.test(text)) return true;
+	}
+	return false;
+}
+
 function parseStrictToolResponse(
 	text: string,
 	requestedTools: ToolDefinition[] | undefined,
@@ -202,6 +221,13 @@ function parseStrictToolResponse(
 			error.code === "missing_envelope" &&
 			text.trim().length > 0
 		) {
+			if (hasStructuredToolIntent(text, requestedTools)) {
+				console.warn("[tool-calling] rejected malformed structured tool intent without protocol reinference");
+				throw new GatewayProtocolError(
+					"model_protocol_error",
+					"Provider response contained malformed structured tool intent and was rejected without semantic repair.",
+				);
+			}
 			console.warn("[tool-calling] preserved terminal prose without protocol reinference");
 			return {
 				content: text,
