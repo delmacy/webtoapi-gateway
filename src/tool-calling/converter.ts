@@ -15,7 +15,7 @@ import type {
 	ToolDefinition,
 	ToolMessage,
 } from "../openai/types.ts";
-import { parseCanonicalToolResponse } from "../protocol/parser.ts";
+import { normalizeRawProtocolResponse } from "../protocol/raw-normalizer.ts";
 import { GatewayProtocolError, GW_JSON_END, GW_JSON_START } from "../protocol/types.ts";
 import { extractToolCalls, hasToolCall } from "./parser.ts";
 import { buildToolPrompt, detectLanguage } from "./prompt.ts";
@@ -125,7 +125,6 @@ function formatMessage(msg: ChatMessage, canonical: boolean): string | null {
 		case "tool":
 			return formatToolResult(msg as ToolMessage);
 
-		// Legacy OpenAI "function" role → treat same as "tool"
 		default: {
 			const legacy = msg as any;
 			if (legacy.role === "function" && typeof legacy.content === "string") {
@@ -140,35 +139,21 @@ function formatMessage(msg: ChatMessage, canonical: boolean): string | null {
 	}
 }
 
-/**
- * Resolve effective tools list based on tool_choice.
- *
- * - "none" → no tools (empty list)
- * - "auto" / undefined → all tools
- * - "required" → all tools + force hint
- * - { function: { name } } → single specified tool only
- */
 export function resolveEffectiveTools(
 	tools: ToolDefinition[] | undefined,
 	toolChoice: ToolChoice | undefined,
 ): { tools: ToolDefinition[]; forceUse: boolean } {
 	if (!tools || tools.length === 0) return { tools: [], forceUse: false };
-
 	if (toolChoice === "none") return { tools: [], forceUse: false };
-
 	if (toolChoice === "required") return { tools, forceUse: true };
-
 	if (typeof toolChoice === "object" && toolChoice.type === "function") {
 		const target = toolChoice.function.name;
 		const filtered = tools.filter((t) => t.function.name === target);
 		return { tools: filtered, forceUse: filtered.length > 0 };
 	}
-
-	// "auto" or undefined
 	return { tools, forceUse: false };
 }
 
-/** Build a single prompt string from OpenAI messages + tools. */
 export function buildPromptFromMessages(
 	messages: ChatMessage[],
 	tools?: ToolDefinition[],
@@ -180,16 +165,13 @@ export function buildPromptFromMessages(
 	const parts: string[] = [];
 	const lang = detectLang(messages);
 
-	if (hasTools) {
+	if (hasTools)
 		parts.push(buildToolPrompt(effective.tools, lang, effective.forceUse, compactTools));
-	}
-
 	for (const msg of messages) {
 		const formatted = formatMessage(msg, compactTools);
 		if (formatted) parts.push(formatted);
 	}
 
-	// When the last message contains tool results, add a continuation hint
 	const lastMsg = messages[messages.length - 1];
 	const endsWithToolResult = lastMsg?.role === "tool" || (lastMsg as any)?.role === "function";
 	if (endsWithToolResult) {
@@ -203,47 +185,86 @@ export function buildPromptFromMessages(
 	return { prompt: parts.join("\n\n"), hasTools };
 }
 
-function canonicalizeSingleEnvelope(text: string): string | undefined {
-	const start = text.indexOf(GW_JSON_START);
-	const end = text.indexOf(GW_JSON_END, start + GW_JSON_START.length);
-	if (start < 0 || end < 0) return undefined;
-	if (text.indexOf(GW_JSON_START, start + GW_JSON_START.length) >= 0) return undefined;
-	if (text.indexOf(GW_JSON_END, end + GW_JSON_END.length) >= 0) return undefined;
-	return text.slice(start, end + GW_JSON_END.length);
+function escapeStructuredIntentRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function parseStrictToolResponse(text: string, requestedTools?: ToolDefinition[]) {
+function hasStructuredToolIntent(
+	text: string,
+	requestedTools: ToolDefinition[] | undefined,
+): boolean {
+	if (text.includes(GW_JSON_START) || text.includes(GW_JSON_END)) return true;
+	if (/"type"\s*:\s*"tool_call"/.test(text) || /"calls"\s*:/.test(text)) return true;
+	if (/"name"\s*:\s*"[^"\r\n]+"[\s\S]{0,400}"arguments"\s*:/.test(text)) return true;
+	if (/"arguments"\s*:[\s\S]{0,400}"name"\s*:\s*"[^"\r\n]+"/.test(text)) return true;
+
+	for (const tool of requestedTools ?? []) {
+		const name = escapeStructuredIntentRegex(tool.function.name);
+		const jsonName = new RegExp(`"name"\\s*:\\s*"${name}"`);
+		const xmlBlock = new RegExp(`<\\/?${name}(?:\\s[^>]*)?>`);
+		if ((jsonName.test(text) && /"arguments"\s*:/.test(text)) || xmlBlock.test(text)) return true;
+	}
+	return false;
+}
+
+function parseStrictToolResponse(
+	text: string,
+	requestedTools: ToolDefinition[] | undefined,
+	_allowTerminalProse: boolean,
+) {
 	try {
-		return parseCanonicalToolResponse(text, requestedTools);
+		const normalized = normalizeRawProtocolResponse(text, requestedTools);
+		if (normalized.mode !== "exact-envelope") {
+			console.warn(`[tool-calling] normalized raw provider output mode=${normalized.mode}`);
+		}
+		return normalized.parsed;
 	} catch (error) {
-		if (!(error instanceof GatewayProtocolError) || error.code !== "trailing_content") throw error;
-		const canonical = canonicalizeSingleEnvelope(text);
-		if (!canonical) throw error;
-		const parsed = parseCanonicalToolResponse(canonical, requestedTools);
-		console.warn(
-			"[tool-calling] canonicalized one valid GW_JSON envelope and discarded non-action trailing prose",
-		);
-		return parsed;
+		if (
+			error instanceof GatewayProtocolError &&
+			error.code === "missing_envelope" &&
+			text.trim().length > 0
+		) {
+			if (hasStructuredToolIntent(text, requestedTools)) {
+				console.warn(
+					"[tool-calling] rejected malformed structured tool intent without protocol reinference",
+				);
+				throw new GatewayProtocolError(
+					"model_protocol_error",
+					"Provider response contained malformed structured tool intent and was rejected without semantic repair.",
+				);
+			}
+			console.warn("[tool-calling] preserved terminal prose without protocol reinference");
+			return {
+				content: text,
+				reasoningContent: undefined,
+				toolCalls: undefined,
+				finishReason: "stop" as const,
+			};
+		}
+		throw error;
 	}
 }
 
 /**
  * Parse text response and detect tool calls.
- * Strict mode requires GW_AGENT_PROTOCOL/1. A response containing exactly one
- * valid envelope plus inert surrounding prose is canonicalized deterministically;
- * the surrounding prose is never interpreted as an action.
+ * Strict mode still requires canonical GW_AGENT_PROTOCOL semantics for actions, but accepts
+ * deterministic syntactic recovery from raw provider output before validation. Plain terminal
+ * prose is preserved as a message for both streaming and non-streaming callers without asking
+ * the provider to infer the task again. Malformed structured protocol still fails closed.
+ * Natural-language intent is never inferred into an action.
  */
 export function parseToolResponse(
 	text: string,
 	requestedTools?: ToolDefinition[],
 	strictProtocol = false,
+	allowTerminalProse = false,
 ): {
 	content: string | null;
 	reasoningContent?: string;
 	toolCalls: ToolCallOutput[] | undefined;
 	finishReason: "stop" | "tool_calls";
 } {
-	if (strictProtocol) return parseStrictToolResponse(text, requestedTools);
+	if (strictProtocol) return parseStrictToolResponse(text, requestedTools, allowTerminalProse);
 
 	if (!requestedTools || requestedTools.length === 0 || !hasToolCall(text)) {
 		return {

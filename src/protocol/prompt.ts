@@ -48,6 +48,18 @@ ${GW_JSON_START}
 {"type":"error","message":"brief protocol/runtime problem"}
 ${GW_JSON_END}
 
+STRICT OUTPUT CONTRACT:
+- Your entire response MUST consist of exactly one protocol envelope and surrounding whitespace only.
+- Do not write explanations, acknowledgements, progress prose, headings, Markdown, examples, or code fences outside the envelope.
+- Do not emit more than one protocol envelope.
+- Do not emit more than one top-level JSON object.
+- Do not emit both a tool request and a separate conversational response.
+- Put any user-visible progress inside the envelope's content field.
+- The first non-whitespace characters of the response MUST be ${GW_JSON_START}.
+- The last non-whitespace characters of the response MUST be ${GW_JSON_END}.
+- The payload between the markers MUST be one valid JSON object with a supported type field.
+- Before sending, verify: one opening marker, one closing marker, one top-level JSON object, a valid type, and no text outside the envelope.
+
 The JSON must be valid. Do not use Markdown fences around the envelope. Do not invent action results.`;
 
 const CN_BASE = `API 后端序列化模式 (${GW_PROTOCOL_VERSION}):
@@ -90,6 +102,18 @@ ${GW_JSON_START}
 {"type":"error","message":"简短的协议或运行时问题"}
 ${GW_JSON_END}
 
+严格输出契约：
+- 整个回复必须且只能包含一个协议 envelope，除空白外不得包含其他内容。
+- 不要在 envelope 外输出解释、确认、进度文字、标题、Markdown、示例或代码块。
+- 不要输出多个协议 envelope。
+- 不要输出多个顶层 JSON 对象。
+- 不要同时输出工具请求和独立的对话回复。
+- 用户可见的进度必须放在 envelope 的 content 字段内。
+- 回复的第一个非空白字符必须开始于 ${GW_JSON_START}。
+- 回复的最后一个非空白字符必须结束于 ${GW_JSON_END}。
+- 标记之间必须只有一个有效 JSON 对象，并包含受支持的 type 字段。
+- 发送前检查：一个开始标记、一个结束标记、一个顶层 JSON 对象、有效 type，并且 envelope 外无文字。
+
 JSON 必须有效。不要在 envelope 外添加 Markdown 代码块。不要伪造动作执行结果。`;
 
 export function buildCanonicalProtocolContract(options: ProtocolPromptOptions = {}): string {
@@ -126,7 +150,7 @@ export function buildProtocolRepairPrompt(
 ): string {
 	const previous = boundedPreviousOutput(previousOutput);
 	if (lang === "cn") {
-		return `${GW_PROTOCOL_VERSION} 修复请求。\n上一条模型回复未满足协议：${problem}\n不要重新分析任务，不要选择新的动作，也不要改变原意。只把上一条回复重新编码成一个有效的 GW_JSON envelope。若原意是最终回复，message.content 必须包含完整且非空的最终回复，绝不能返回空 message。\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\n只返回 ${GW_JSON_START} ... ${GW_JSON_END}。`;
+		return `${GW_PROTOCOL_VERSION} 修复请求。\n上一条模型回复未满足协议：${problem}\n这是纯序列化修复。不要重新分析任务，不要产生新的推理，不要选择新的动作，也不要改变原意。只重新序列化同一个预期回复。若原意是工具请求，必须保留相同的动作名称和参数；若原意是最终回复，必须保留相同的语义内容，且 message.content 必须完整且非空。不要添加解释、Markdown 或 envelope 外文字。\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\n只返回一个 ${GW_JSON_START} ... ${GW_JSON_END}。`;
 	}
-	return `${GW_PROTOCOL_VERSION} repair request.\nThe previous model response violated the protocol: ${problem}\nDo not re-evaluate the task, choose a different action, or intentionally change the semantics. Re-encode the previous response as exactly one valid GW_JSON envelope. If the intended response is terminal, message.content MUST contain the complete non-empty final answer; never return an empty message.\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\nReturn only ${GW_JSON_START} ... ${GW_JSON_END}.`;
+	return `${GW_PROTOCOL_VERSION} repair request.\nThe previous model response violated the protocol: ${problem}\nThis is a serialization-only repair. Do not re-evaluate the task, generate new reasoning, choose a different action, or change the intended semantics. Re-serialize the SAME intended response only. If it was a tool request, preserve the same action name(s) and arguments. If it was a final message, preserve the same semantic content and keep message.content complete and non-empty. Do not add explanations, Markdown, or text outside the envelope.\n\n<UNTRUSTED_PREVIOUS_OUTPUT>\n${previous}\n</UNTRUSTED_PREVIOUS_OUTPUT>\n\nReturn exactly one ${GW_JSON_START} ... ${GW_JSON_END} envelope and nothing else.`;
 }
