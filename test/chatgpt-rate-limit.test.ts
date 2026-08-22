@@ -28,10 +28,14 @@ describe("ChatGPT model cap cooldown", () => {
 	test("ignores unrelated or malformed 429 payloads", () => {
 		expect(parseChatGptModelCap("not-json")).toBeNull();
 		expect(
-			parseChatGptModelCap(JSON.stringify({ detail: { code: "rate_limit_exceeded", clears_in: 10 } })),
+			parseChatGptModelCap(
+				JSON.stringify({ detail: { code: "rate_limit_exceeded", clears_in: 10 } }),
+			),
 		).toBeNull();
 		expect(
-			parseChatGptModelCap(JSON.stringify({ detail: { code: "model_cap_exceeded", clears_in: 0 } })),
+			parseChatGptModelCap(
+				JSON.stringify({ detail: { code: "model_cap_exceeded", clears_in: 0 } }),
+			),
 		).toBeNull();
 	});
 
