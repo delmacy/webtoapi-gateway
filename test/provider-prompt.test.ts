@@ -136,6 +136,64 @@ describe("stateful provider prompt planning", () => {
 		expect(divergedPlan.resetSession).toBe(true);
 	});
 
+	test("oversized exact retry rehydrates from a bounded recent suffix", () => {
+		const store = new SessionEventStore();
+		const body: ChatCompletionRequest = {
+			model: "deepseek-chat",
+			tools: [READ_TOOL],
+			messages: [
+				{ role: "system", content: "KEEP-SYSTEM-INSTRUCTION" },
+				{ role: "user", content: `OLD-HISTORY-${"x".repeat(12_000)}` },
+				{ role: "assistant", content: `OLD-ANSWER-${"y".repeat(12_000)}` },
+				{ role: "user", content: "LATEST-REQUEST" },
+			],
+		};
+		store.reconcile("s-large", body.messages, body.tools);
+		const retry = store.reconcile("s-large", body.messages, body.tools);
+		const plan = buildProviderPromptPlan(body, retry, {
+			compactTools: true,
+			statefulEligible: true,
+			rehydrationMaxChars: 8_192,
+		});
+		expect(plan.mode).toBe("retry-rehydrate");
+		expect(plan.prompt.length).toBeLessThanOrEqual(8_192);
+		expect(plan.prompt).toContain("KEEP-SYSTEM-INSTRUCTION");
+		expect(plan.prompt).toContain("LATEST-REQUEST");
+		expect(plan.prompt).not.toContain("OLD-HISTORY-");
+		expect(plan.prompt).not.toContain("OLD-ANSWER-");
+		expect(plan.rehydrationOmittedMessages).toBe(2);
+	});
+
+	test("delta plan keeps a bounded fallback rehydration prompt", () => {
+		const store = new SessionEventStore();
+		const initial: ChatCompletionRequest = {
+			model: "deepseek-chat",
+			tools: [READ_TOOL],
+			messages: [
+				{ role: "system", content: "KEEP-SYSTEM" },
+				{ role: "user", content: `OLD-${"z".repeat(12_000)}` },
+			],
+		};
+		store.reconcile("s-fallback", initial.messages, initial.tools);
+		const body: ChatCompletionRequest = {
+			...initial,
+			messages: [...initial.messages, { role: "user", content: "NEW-DELTA" }],
+		};
+		const append = store.reconcile("s-fallback", body.messages, body.tools);
+		const plan = buildProviderPromptPlan(body, append, {
+			compactTools: true,
+			statefulEligible: true,
+			rehydrationMaxChars: 8_192,
+		});
+		expect(plan.mode).toBe("delta");
+		expect(plan.prompt).toContain("NEW-DELTA");
+		expect(plan.fullPrompt.length).toBeLessThanOrEqual(8_192);
+		expect(plan.fullPrompt).toContain("KEEP-SYSTEM");
+		expect(plan.fullPrompt).toContain("NEW-DELTA");
+		expect(plan.fullPrompt).not.toContain("OLD-");
+		expect(plan.rehydrationOmittedMessages).toBe(1);
+	});
+
 	test("unstable sessions remain full-prompt and stateless", () => {
 		const store = new SessionEventStore();
 		const body = baseBody();
