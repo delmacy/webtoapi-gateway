@@ -189,7 +189,10 @@ function escapeStructuredIntentRegex(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function hasStructuredToolIntent(text: string, requestedTools: ToolDefinition[] | undefined): boolean {
+function hasStructuredToolIntent(
+	text: string,
+	requestedTools: ToolDefinition[] | undefined,
+): boolean {
 	if (text.includes(GW_JSON_START) || text.includes(GW_JSON_END)) return true;
 	if (/"type"\s*:\s*"tool_call"/.test(text) || /"calls"\s*:/.test(text)) return true;
 	if (/"name"\s*:\s*"[^"\r\n]+"[\s\S]{0,400}"arguments"\s*:/.test(text)) return true;
@@ -222,7 +225,9 @@ function parseStrictToolResponse(
 			text.trim().length > 0
 		) {
 			if (hasStructuredToolIntent(text, requestedTools)) {
-				console.warn("[tool-calling] rejected malformed structured tool intent without protocol reinference");
+				console.warn(
+					"[tool-calling] rejected malformed structured tool intent without protocol reinference",
+				);
 				throw new GatewayProtocolError(
 					"model_protocol_error",
 					"Provider response contained malformed structured tool intent and was rejected without semantic repair.",
