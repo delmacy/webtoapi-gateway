@@ -8,7 +8,12 @@ import { parseCookieHeader } from "../shared/cookie-parser.ts";
 import { throwIfSessionExpired } from "../shared/error-guard.ts";
 import type { EvalResult } from "../shared/eval-helpers.ts";
 import { textToStream } from "../shared/stream-helpers.ts";
-import { ProviderApiError, type ProviderSendParams, type StreamResult, withTimeout } from "../types.ts";
+import {
+	ProviderApiError,
+	type ProviderSendParams,
+	type StreamResult,
+	withTimeout,
+} from "../types.ts";
 import type { ChatGPTWebAuth } from "./auth.ts";
 import {
 	getChatGptModelCooldown,
