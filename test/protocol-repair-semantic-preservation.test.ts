@@ -111,4 +111,32 @@ describe("protocol repair semantic preservation E2E", () => {
 		expect(text).not.toContain("TASK-158 EXECUTED");
 		expect(text).not.toContain("4f8b3c9e1d2a5b7c8f9e0d1a2b3c4d5e6f7a8b9c");
 	});
+
+	test("streaming malformed structured tool intent fails closed and never becomes terminal prose or a second inference", async () => {
+		const malformed = [
+			"A implementação principal está correta; agora vou executar a verificação.",
+			'"name":"exec","arguments":',
+			GW_JSON_END,
+		].join("\n");
+		const fabricated = canonicalMessage("EXECUTED after repair");
+		const client = createSequenceClient([malformed, fabricated]);
+		const body: ChatCompletionRequest = {
+			model: "test-model",
+			stream: true,
+			messages: [{ role: "user", content: "Continue the review and use tools when needed." }],
+			tools: [EXEC_TOOL],
+		};
+
+		const res = await handleChatCompletions(body, client as any);
+		expect(res.status).toBe(502);
+		expect(client.calls).toBe(1);
+
+		const payload = (await res.json()) as {
+			error?: { type?: string; code?: string; message?: string };
+		};
+		expect(payload.error?.type).toBe("gateway_protocol_error");
+		expect(payload.error?.code).toBe("model_protocol_error");
+		expect(payload.error?.message).toContain("malformed structured tool intent");
+		expect(payload.error?.message).not.toContain("EXECUTED after repair");
+	});
 });
